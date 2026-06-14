@@ -282,6 +282,7 @@ const initials = (name) => name.split(/[\s—-]+/).filter(Boolean).slice(0, 2).m
 // ---------- SVG icons (no emojis anywhere) ----------
 function Icon({ name, size = 14, style }) {
   const paths = {
+    chevron: <polyline points="6 9 12 15 18 9" />,
     calendar: <><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></>,
     folder: <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />,
     sun: <><circle cx="12" cy="12" r="5" /><line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" /><line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" /><line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></>,
@@ -426,6 +427,12 @@ export default function App({ mode = "admin" }) {
   const [newStage, setNewStage] = useState("");
   const [stageTemplate, setStageTemplate] = useState("blank"); // 'blank' or a STAGE_TEMPLATES key
   const [expandedGuide, setExpandedGuide] = useState(null); // task id with its how-to guide open
+  const [collapsedStages, setCollapsedStages] = useState({}); // stage id -> true when collapsed (view-only)
+  const toggleStageCollapsed = (sid) => setCollapsedStages(c => ({ ...c, [sid]: !c[sid] }));
+  const [taskView, setTaskView] = useState("active"); // active | all | completed — workflow task filter
+  // A task counts as "completed" only if it actually finished (has completedAt).
+  // Recurring tasks roll forward and never set completedAt, so they always read as active.
+  const taskMatchesView = (t) => taskView === "all" ? true : taskView === "completed" ? !!t.completedAt : !t.completedAt;
   const [showNewProject, setShowNewProject] = useState(false);
   const [page, setPage] = useState("projects");
   const [projTab, setProjTab] = useState("work"); // work | finance | access inside a project
@@ -964,6 +971,27 @@ export default function App({ mode = "admin" }) {
           </div>
 
           {/* Stages — the whole card is draggable */}
+          {project.stages.length > 0 && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+              <div style={{ display: "inline-flex", border: `1px solid ${T.line}`, borderRadius: 8, overflow: "hidden" }}>
+                {[["all", "All"], ["active", "Active"], ["completed", "Completed"]].map(([k, label]) => (
+                  <button key={k} onClick={() => setTaskView(k)} style={{
+                    padding: "5px 12px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600,
+                    background: taskView === k ? T.accent : "transparent",
+                    color: taskView === k ? (dark ? "#0D0F13" : "#fff") : T.inkSoft,
+                  }}>{label}</button>
+                ))}
+              </div>
+              <button onClick={() => {
+                const allCollapsed = project.stages.every(s => collapsedStages[s.id]);
+                const next = {};
+                if (!allCollapsed) project.stages.forEach(s => { next[s.id] = true; });
+                setCollapsedStages(next);
+              }} style={{ ...ghostBtn, fontSize: 11.5, padding: "5px 10px" }}>
+                {project.stages.every(s => collapsedStages[s.id]) ? "Expand all" : "Collapse all"}
+              </button>
+            </div>
+          )}
           {project.stages.map(s => (
             <section key={s.id}
               draggable={!editingStage && !editingTask}
@@ -989,7 +1017,7 @@ export default function App({ mode = "admin" }) {
                 transition: "border-color .15s, box-shadow .15s, opacity .15s",
               }}>
               {/* Stage header */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: collapsedStages[s.id] ? 0 : 12 }}>
                 {editingStage === s.id ? (
                   <StageEditForm stage={s} onSave={(name) => saveStageEdit(s.id, name)} onCancel={() => setEditingStage(null)} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} />
                 ) : confirmDeleteStage === s.id ? (
@@ -1000,7 +1028,11 @@ export default function App({ mode = "admin" }) {
                   </div>
                 ) : (
                   <>
-                    <h2 style={{ fontSize: 15, margin: 0, fontWeight: 700 }}>{s.name}
+                    <button onClick={() => toggleStageCollapsed(s.id)} style={{ ...iconBtn, padding: "2px 4px", display: "flex" }}
+                      title={collapsedStages[s.id] ? "Expand stage" : "Collapse stage"}>
+                      <Icon name="chevron" size={15} style={{ verticalAlign: 0, transform: collapsedStages[s.id] ? "rotate(-90deg)" : "none", transition: "transform .15s" }} />
+                    </button>
+                    <h2 onClick={() => toggleStageCollapsed(s.id)} style={{ fontSize: 15, margin: 0, fontWeight: 700, cursor: "pointer", userSelect: "none" }}>{s.name}
                       <span style={{ fontWeight: 400, color: T.inkSoft, fontSize: 12.5, marginLeft: 8 }}>
                         {s.tasks.filter(t => t.status === "done").length}/{s.tasks.length} done
                       </span>
@@ -1012,7 +1044,14 @@ export default function App({ mode = "admin" }) {
               </div>
 
               {/* Tasks */}
-              {s.tasks.map(t => (
+              {!collapsedStages[s.id] && (<>
+              {(() => { const viewTasks = s.tasks.filter(taskMatchesView); return (<>
+              {s.tasks.length > 0 && viewTasks.length === 0 && (
+                <div style={{ fontSize: 12, color: T.inkSoft, padding: "4px 0 10px", fontStyle: "italic" }}>
+                  {taskView === "active" ? "All tasks here are completed — switch to All or Completed to see them." : "No completed tasks in this stage yet."}
+                </div>
+              )}
+              {viewTasks.map(t => (
                 <div key={t.id} data-task-handle="true"
                   draggable={editingTask !== t.id}
                   onDragStart={e => {
@@ -1109,13 +1148,17 @@ export default function App({ mode = "admin" }) {
                 </div>
               ))}
 
-              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                <input value={newTask[s.id] || ""} onChange={e => setNewTask(nt => ({ ...nt, [s.id]: e.target.value }))}
-                  onKeyDown={e => e.key === "Enter" && addTask(s.id)}
-                  placeholder="Add a task and press Enter"
-                  style={{ ...inputStyle, flex: 1, background: T.bg }} />
-                <button onClick={() => addTask(s.id)} style={primaryBtn}>Add</button>
-              </div>
+              {taskView !== "completed" && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <input value={newTask[s.id] || ""} onChange={e => setNewTask(nt => ({ ...nt, [s.id]: e.target.value }))}
+                    onKeyDown={e => e.key === "Enter" && addTask(s.id)}
+                    placeholder="Add a task and press Enter"
+                    style={{ ...inputStyle, flex: 1, background: T.bg }} />
+                  <button onClick={() => addTask(s.id)} style={primaryBtn}>Add</button>
+                </div>
+              )}
+              </>); })()}
+              </>)}
             </section>
           ))}
 
@@ -1881,6 +1924,7 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
   const [tab, setTab] = useState("progress"); // progress | payments
   const [reportingId, setReportingId] = useState(null); // payment being reported (method picker open)
   const [reportMethod, setReportMethod] = useState(PAY_METHODS[0]);
+  const [taskView, setTaskView] = useState("active"); // active | all | completed
 
   // Defensive guard: during state updates `project` can briefly be undefined.
   // Never crash the whole app over a transient render — show a calm fallback.
@@ -1897,6 +1941,9 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
   const allVisible = visibleStages.flatMap(s => s.tasks);
   const progress = allVisible.length ? Math.round(100 * allVisible.filter(t => t.status === "done").length / allVisible.length) : 0;
   const stageProgress = (s) => s.tasks.length ? s.tasks.filter(t => t.status === "done").length / s.tasks.length : 0;
+  // Completion filter (Active hides finished work; recurring tasks have no completedAt so always read active).
+  const taskMatchesView = (t) => taskView === "all" ? true : taskView === "completed" ? !!t.completedAt : !t.completedAt;
+  const viewStages = visibleStages.map(s => ({ ...s, viewTasks: s.tasks.filter(taskMatchesView) }));
 
   const finance = project.finance || [];
   const isOverdue = (f) => f.status === "pending" && f.dueDate && f.dueDate < todayStr;
@@ -1986,13 +2033,29 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
 
         {tab === "progress" ? (
           <>
-            {visibleStages.map(s => (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+              <div style={{ display: "inline-flex", border: `1px solid ${T.line}`, borderRadius: 8, overflow: "hidden" }}>
+                {[["all", "All"], ["active", "Active"], ["completed", "Completed"]].map(([k, label]) => (
+                  <button key={k} onClick={() => setTaskView(k)} style={{
+                    padding: "5px 14px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600,
+                    background: taskView === k ? T.accent : "transparent",
+                    color: taskView === k ? (dark ? "#0D0F13" : "#fff") : T.inkSoft,
+                  }}>{label}</button>
+                ))}
+              </div>
+            </div>
+            {viewStages.map(s => (
               <section key={s.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "16px 20px", marginBottom: 14 }}>
                 <h2 style={{ fontSize: 15, margin: "0 0 4px", fontWeight: 700 }}>{s.name}
                   {s.tasks.length > 0 && <span style={{ fontWeight: 400, color: T.inkSoft, fontSize: 12.5, marginLeft: 8 }}>{s.tasks.filter(t => t.status === "done").length}/{s.tasks.length} done</span>}
                 </h2>
                 {s.tasks.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "6px 0" }}>Coming up next.</div>}
-                {s.tasks.map(t => (
+                {s.tasks.length > 0 && s.viewTasks.length === 0 && (
+                  <div style={{ fontSize: 12, color: T.inkSoft, padding: "6px 0", fontStyle: "italic" }}>
+                    {taskView === "active" ? "Everything here is done." : "Nothing completed here yet."}
+                  </div>
+                )}
+                {s.viewTasks.map(t => (
                   <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: `1px solid ${T.line}`, flexWrap: "wrap" }}>
                     <div style={{ flex: 1, minWidth: 180 }}>
                       <div style={{ fontSize: 13.5, fontWeight: 500, textDecoration: t.status === "done" ? "line-through" : "none", color: t.status === "done" ? T.inkSoft : T.ink }}>{t.title}</div>
