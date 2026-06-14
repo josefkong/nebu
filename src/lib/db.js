@@ -20,7 +20,7 @@ export async function loadProjects() {
   const { data: projects, error } = await supabase
     .from("projects")
     .select(`
-      id, name, client, contact, created_at,
+      id, name, client, contact, created_at, position,
       stages:stages ( id, name, position,
         tasks:tasks ( id, title, status, urgency, client_visible, note, guide,
                       created_at, completed_at, due_date, recurrence, target, count, last_done, position )
@@ -30,6 +30,7 @@ export async function loadProjects() {
       accesses:accesses ( id, label, category, username, password, url, note, position ),
       activity:activity ( id, when_label, text, created_at )
     `)
+    .order("position", { ascending: true })
     .order("position", { foreignTable: "stages", ascending: true });
 
   if (error) throw error;
@@ -139,6 +140,18 @@ export const db = {
     await Promise.all(orderedIds.map((id, i) =>
       supabase.from("stages").update({ position: i }).eq("id", id)));
   },
+  async reorderProjects(orderedIds) {
+    await Promise.all(orderedIds.map((id, i) =>
+      supabase.from("projects").update({ position: i }).eq("id", id)));
+  },
+  async reorderClients(orderedIds) {
+    await Promise.all(orderedIds.map((id, i) =>
+      supabase.from("clients").update({ position: i }).eq("id", id)));
+  },
+  async reorderAccesses(orderedIds) {
+    await Promise.all(orderedIds.map((id, i) =>
+      supabase.from("accesses").update({ position: i }).eq("id", id)));
+  },
 
   // Tasks — patch keys are already snake_case from the caller
   async createTask(stageId, title, position) {
@@ -209,7 +222,8 @@ export const db = {
   // Clients
   async loadClients() {
     const { data, error } = await supabase.from("clients")
-      .select("id, name, company, email, status, last_reset, client_projects(project_id)")
+      .select("id, name, company, email, status, last_reset, position, client_projects(project_id)")
+      .order("position", { ascending: true })
       .order("created_at", { ascending: true });
     if (error) throw error;
     return (data || []).map((c) => ({

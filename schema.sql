@@ -28,6 +28,7 @@ create table if not exists public.projects (
   name text not null,
   client text default '',
   contact text default '',
+  position int default 0,
   created_at timestamptz default now()
 );
 
@@ -106,6 +107,7 @@ create table if not exists public.clients (
   email text not null,
   status text default 'invited',
   last_reset date,
+  position int default 0,
   -- links this client row to a Supabase auth user (by matching email), so RLS
   -- can resolve "which projects can the logged-in client see".
   auth_email text generated always as (lower(email)) stored,
