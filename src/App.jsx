@@ -188,7 +188,6 @@ const STAGE_TEMPLATES = {
   },
 };
 
-const LAUNCH_PACK_ORDER = ["project_infra", "meta_ads_infra", "whatsapp_infra", "sales_infra", "creative_production", "social_media"];
 const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); };
 const mkTask = (title) => ({ id: uid(), title, status: "todo", urgency: "none", clientVisible: true, note: "", createdAt: new Date().toISOString(), completedAt: null, dueDate: null, recurrence: "none" });
 const inDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }; // YYYY-MM-DD
@@ -522,17 +521,6 @@ export default function App({ mode = "admin" }) {
     ...(t.recurrence ? { recurrence: t.recurrence, dueDate: new Date().toISOString().slice(0, 10) } : {}),
   });
   const addStage = () => {
-    if (stageTemplate === "pack_launch") {
-      update(p => {
-        LAUNCH_PACK_ORDER.forEach(k => {
-          const tpl = STAGE_TEMPLATES[k];
-          p.stages.push({ id: uid(), name: tpl.name, tasks: tpl.tasks.map(tplTask) });
-        });
-        return p;
-      });
-      setNewStage(""); setStageTemplate("blank");
-      return;
-    }
     const tpl = stageTemplate !== "blank" ? STAGE_TEMPLATES[stageTemplate] : null;
     const name = newStage.trim() || (tpl ? tpl.name : "");
     if (!name) return;
@@ -1100,7 +1088,6 @@ export default function App({ mode = "admin" }) {
             <select value={stageTemplate} onChange={e => setStageTemplate(e.target.value)} title="Stage template"
               style={{ ...inputStyle, flex: "1 1 150px" }}>
               <option value="blank">Blank stage</option>
-              <option value="pack_launch">Info Product Launch — full setup (6 stages)</option>
               {Object.entries(STAGE_TEMPLATES).map(([k, t]) => <option key={k} value={k}>{t.name} ({t.tasks.length} tasks)</option>)}
             </select>
             <button onClick={addStage} style={{ ...primaryBtn, background: "transparent", border: `1px solid ${T.accent}`, color: T.accent }}>Add stage</button>
@@ -1805,7 +1792,18 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
   const [reportingId, setReportingId] = useState(null); // payment being reported (method picker open)
   const [reportMethod, setReportMethod] = useState(PAY_METHODS[0]);
 
-  const visibleStages = project.stages.map(s => ({ ...s, tasks: s.tasks.filter(t => t.clientVisible) }));
+  // Defensive guard: during state updates `project` can briefly be undefined.
+  // Never crash the whole app over a transient render — show a calm fallback.
+  if (!project || !Array.isArray(project.stages)) {
+    return (
+      <div style={{ minHeight: "100vh", background: T.bg, color: T.inkSoft, display: "flex",
+        alignItems: "center", justifyContent: "center", fontFamily: FONT_STACK, fontSize: 14 }}>
+        Loading…
+      </div>
+    );
+  }
+
+  const visibleStages = project.stages.map(s => ({ ...s, tasks: (s.tasks || []).filter(t => t.clientVisible) }));
   const allVisible = visibleStages.flatMap(s => s.tasks);
   const progress = allVisible.length ? Math.round(100 * allVisible.filter(t => t.status === "done").length / allVisible.length) : 0;
   const stageProgress = (s) => s.tasks.length ? s.tasks.filter(t => t.status === "done").length / s.tasks.length : 0;

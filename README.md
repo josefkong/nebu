@@ -39,7 +39,52 @@ Keep these two values handy for Step 2.
 
 ---
 
-## Step 2 — Run it on your computer (confirm it works before going live)
+## Step 2 — Organize the project files and run locally
+
+### 2a — Set up the folder structure
+
+When you extract the project files, they arrive loose in the root. Vite expects a specific structure. Set it up now:
+
+If you're on **Windows (PowerShell)**:
+```powershell
+mkdir src
+mkdir src\lib
+move main.jsx src\
+move Root.jsx src\
+move Login.jsx src\
+move App.jsx src\
+move auth.js src\lib\
+move supabase.js src\lib\
+move db.js src\lib\
+```
+
+If you're on **Mac/Linux**:
+```bash
+mkdir -p src/lib
+mv main.jsx src/
+mv Root.jsx src/
+mv Login.jsx src/
+mv App.jsx src/
+mv auth.js src/lib/
+mv supabase.js src/lib/
+mv db.js src/lib/
+```
+
+Your folder structure should now be:
+```
+src/
+  main.jsx
+  Root.jsx
+  Login.jsx
+  App.jsx
+  lib/
+    auth.js
+    supabase.js
+    db.js
+(all other files stay at the root)
+```
+
+### 2b — Configure environment variables and start the app
 
 1. Open a terminal in this project folder (the one containing `package.json`).
 2. Create your env file: copy `.env.example` to `.env`:
@@ -50,10 +95,14 @@ Keep these two values handy for Step 2.
    VITE_SUPABASE_URL=https://abcd1234.supabase.co
    VITE_SUPABASE_ANON_KEY=eyJhbGciOi...your-anon-key...
    ```
+   **Important:** Double-check these values match exactly what you copied from Supabase (Project Settings → API). No extra spaces or typos.
+
 4. Install dependencies (one time): `npm install`
 5. Start it: `npm run dev`
 6. Open the URL it prints (usually http://localhost:5173).
    You'll see the **login screen**. You can't log in yet — create your admin user next.
+
+> **Troubleshooting:** If you get "Invalid path specified in request URL" at login, your `.env` values are wrong or not being read. Close the dev server (Ctrl+C), verify your `.env` has the correct URL and key, save it, and restart `npm run dev`.
 
 ---
 
@@ -61,23 +110,27 @@ Keep these two values handy for Step 2.
 
 1. In Supabase, left menu → **Authentication** → **Users** → **Add user** → **Create new user**.
 2. Enter your email and a password. Click create.
-3. Make this user the **admin**. Still in Authentication → Users, click your new user,
-   find **Raw app metadata** (or use SQL below), and set:
-   ```json
-   { "role": "admin" }
-   ```
-   If the UI doesn't let you edit metadata, open **SQL Editor** and run (replace the email):
+3. Make this user the **admin** using SQL (the simplest approach):
+   - Left menu → **SQL Editor** → **Create a new snippet**
+   - Paste this (replace the email):
    ```sql
    update auth.users
    set raw_app_meta_data = raw_app_meta_data || '{"role":"admin"}'::jsonb
    where email = 'you@youremail.com';
    ```
+   - **Important:** Before running, look at the right side of the SQL Editor. Click on the role selector and choose **postgres** (superuser). This is required for permission to update auth users.
+   - Click **Run**. You should see "Success. 1 row updated."
+
 4. Back at http://localhost:5173, sign in with that email/password.
    You should now see the full Nebu dashboard. Create a project — refresh the page —
    it's still there. **That confirms persistence is working.**
 
 > Why this matters: the admin role is what unlocks write access. Everyone else is a
 > read-only client. This is enforced by the database, not just the screen.
+
+**Troubleshooting the SQL step:**
+- If you get "permission denied for table users", you're running as the wrong role. Use the role selector on the right side of the SQL Editor and choose **postgres** (superuser), not authenticated.
+- If you're not sure which role you're using, look at the right panel — it shows the current role. Postgres should have a crown icon.
 
 ---
 
@@ -156,11 +209,13 @@ sensitive client credentials. Until then, prefer storing a *reference* ("passwor
 
 ## Troubleshooting
 
-- **Login screen says "Missing Supabase env vars"** → your `.env` (local) or Vercel env
-  vars (live) aren't set. Re-check Step 2.4 / Step 4.3.
-- **Logged in but see "Could not connect"** → the SQL schema didn't run, or the URL/key
-  is wrong. Re-run `supabase/schema.sql` and recheck the API values.
-- **Client logs in but sees nothing** → confirm (a) you granted them projects in Nebu,
-  and (b) their auth email exactly matches their email in the Clients list.
-- **Admin can't write / everything read-only** → the `role: admin` metadata isn't set on
-  your user. Redo Step 3.3, then sign out and back in (metadata loads at login).
+**During setup (Steps 2–3):**
+- **"Failed to load url /src/main.jsx"** → The project files are in the root folder, not organized in `src/`. Go back to Step 2a and create the folder structure. This is required.
+- **"Invalid path specified in request URL" at login** → Your `.env` file has wrong Supabase values or isn't being read. Close the dev server (Ctrl+C), verify that `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env` match exactly what you copied from Supabase (Project Settings → API), save the file, and restart `npm run dev`.
+- **"permission denied for table users" when running SQL in Step 3** → You're running the SQL as the wrong role. In the SQL Editor, look at the right side and select the **postgres** (superuser) role before running the update command. Don't use authenticated.
+- **Login screen says "Missing Supabase env vars"** → your `.env` (local) or Vercel env vars (live) aren't set. Re-check Step 2.3 / Step 4.3.
+
+**During normal use:**
+- **Logged in but see "Could not connect"** → the SQL schema didn't run, or the URL/key is wrong. Re-run `supabase/schema.sql` and recheck the API values.
+- **Client logs in but sees nothing** → confirm (a) you granted them projects in Nebu, and (b) their auth email exactly matches their email in the Clients list.
+- **Admin can't write / everything read-only** → the `role: admin` metadata isn't set on your user. Redo Step 3 (run the SQL with postgres role), then sign out and back in (metadata loads at login).
