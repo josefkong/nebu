@@ -121,13 +121,23 @@ create table if not exists public.client_projects (
 
 -- ---------------------------------------------------------------------------
 -- Helper: set of project ids the CURRENT logged-in client may read.
+-- The logged-in user's email can appear as a top-level 'email' claim OR under
+-- user_metadata depending on the auth flow, and may be absent from the token
+-- entirely. We coalesce all sources and fall back to looking the user up by
+-- auth.uid(), so a missing email claim can never silently return zero projects
+-- (which would wrongly show a client "no projects shared"). security definer
+-- lets the function read auth.users for that final fallback lookup.
 -- ---------------------------------------------------------------------------
 create or replace function public.my_project_ids() returns setof uuid
-language sql stable as $$
+language sql stable security definer as $$
   select cp.project_id
   from public.client_projects cp
   join public.clients c on c.id = cp.client_id
-  where c.auth_email = lower(auth.jwt() ->> 'email');
+  where c.auth_email = lower(coalesce(
+    auth.jwt() ->> 'email',
+    auth.jwt() -> 'user_metadata' ->> 'email',
+    (select u.email from auth.users u where u.id = auth.uid())
+  ));
 $$;
 
 -- ---------------------------------------------------------------------------
