@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { loadProjects, persistProject, db } from "./lib/db.js";
 import { supabase } from "./lib/supabase.js";
+import SortableList from "./lib/SortableList.jsx";
 
 // ---------- Nebu brand palette ----------
 // Premium tech-marketing identity: graphite base, warm platinum text,
@@ -449,28 +450,15 @@ export default function App({ mode = "admin" }) {
   const [editingStage, setEditingStage] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [confirmDeleteStage, setConfirmDeleteStage] = useState(null); // inline confirm — window.confirm doesn't fire in this environment
-  const drag = useRef(null);
-  const [dragType, setDragType] = useState(null); // 'task' | 'stage' | null
-  const [dragOver, setDragOver] = useState(null);
 
-  // Lightweight reorder for the sidebar project list (flat list of projects).
-  const projDrag = useRef(null);
-  const [projDragId, setProjDragId] = useState(null);
-  const [projDragOver, setProjDragOver] = useState(null);
-  const reorderProjects = (targetId) => {
-    const fromId = projDrag.current;
-    if (!fromId || fromId === targetId) { setProjDragId(null); setProjDragOver(null); return; }
+  // Reorder projects from a dnd-kit ordered id list; persist new positions.
+  const reorderProjectsByIds = (orderedIds) => {
     setProjects(ps => {
-      const arr = [...ps];
-      const from = arr.findIndex(p => p.id === fromId);
-      const to = arr.findIndex(p => p.id === targetId);
-      if (from < 0 || to < 0) return ps;
-      const [moved] = arr.splice(from, 1);
-      arr.splice(to, 0, moved);
-      db.reorderProjects(arr.map(p => p.id)).catch(e => console.error("reorder projects failed", e));
-      return arr;
+      const byId = Object.fromEntries(ps.map(p => [p.id, p]));
+      const next = orderedIds.map(id => byId[id]).filter(Boolean);
+      db.reorderProjects(orderedIds).catch(e => console.error("reorder projects failed", e));
+      return next;
     });
-    setProjDragId(null); setProjDragOver(null);
   };
 
   const project = projects.find(p => p.id === activeId);
@@ -591,13 +579,10 @@ export default function App({ mode = "admin" }) {
   const addAccess = (item) => update(p => { (p.accesses = p.accesses || []).push(mkAccess(item)); return p; });
   const saveAccess = (aid, patch) => update(p => { const a = (p.accesses || []).find(a => a.id === aid); if (a) Object.assign(a, patch); return p; });
   const deleteAccess = (aid) => { update(p => { p.accesses = (p.accesses || []).filter(a => a.id !== aid); return p; }); db.deleteAccess(aid).catch(e => console.error(e)); };
-  const reorderAccesses = (fromId, toId) => update(p => {
+  const reorderAccesses = (orderedIds) => update(p => {
     const arr = p.accesses || [];
-    const from = arr.findIndex(a => a.id === fromId);
-    const to = arr.findIndex(a => a.id === toId);
-    if (from < 0 || to < 0 || from === to) return p;
-    const [moved] = arr.splice(from, 1);
-    arr.splice(to, 0, moved);
+    const byId = Object.fromEntries(arr.map(a => [a.id, a]));
+    p.accesses = orderedIds.map(id => byId[id]).filter(Boolean);
     return p; // persistProject writes new positions by array index
   });
   const addProject = async () => {
@@ -616,6 +601,12 @@ export default function App({ mode = "admin" }) {
   const addPayment = (item) => update(p => { (p.finance = p.finance || []).push(mkPayment(item)); return p; });
   const deletePayment = (fid) => { update(p => { p.finance = (p.finance || []).filter(f => f.id !== fid); return p; }); db.deletePayment(fid).catch(e => console.error(e)); };
   const savePayment = (fid, patch) => update(p => { const f = (p.finance || []).find(f => f.id === fid); if (f) Object.assign(f, patch); return p; });
+  const reorderPayments = (orderedIds) => update(p => {
+    const arr = p.finance || [];
+    const byId = Object.fromEntries(arr.map(f => [f.id, f]));
+    p.finance = orderedIds.map(id => byId[id]).filter(Boolean);
+    return p; // persistProject writes new positions by array index
+  });
   const markPaid = (fid, method) => update(p => {
     const f = (p.finance || []).find(f => f.id === fid);
     if (!f) return p;
@@ -640,46 +631,39 @@ export default function App({ mode = "admin" }) {
     return p;
   });
 
-  // ----- drag and drop -----
-  const startTaskDrag = (sid, tid) => { drag.current = { type: "task", fromStage: sid, taskId: tid }; setDragType("task"); };
-  const startStageDrag = (sid) => { drag.current = { type: "stage", stageId: sid }; setDragType("stage"); };
-  const endDrag = () => { drag.current = null; setDragType(null); setDragOver(null); };
+  // ----- drag and drop (dnd-kit reorder by ordered id lists) -----
+  const taskDragFromStage = useRef(null); // reserved for cross-stage moves
 
-  const dropTaskOn = (sid, targetTid) => {
-    const d = drag.current; if (!d || d.type !== "task") return;
+  const reorderStagesByIds = (orderedIds) => update(p => {
+    const byId = Object.fromEntries(p.stages.map(s => [s.id, s]));
+    p.stages = orderedIds.map(id => byId[id]).filter(Boolean);
+    return p;
+  });
+
+  const reorderTasksByIds = (sid, orderedIds) => update(p => {
+    const s = p.stages.find(s => s.id === sid);
+    if (!s) return p;
+    const byId = Object.fromEntries(s.tasks.map(t => [t.id, t]));
+    // orderedIds only covers the currently shown subset; preserve any others in place
+    const reordered = orderedIds.map(id => byId[id]).filter(Boolean);
+    const others = s.tasks.filter(t => !orderedIds.includes(t.id));
+    s.tasks = [...reordered, ...others];
+    return p;
+  });
+
+  const moveTaskToStage = (fromInfo, toStageId) => {
+    taskDragFromStage.current = null;
+    if (!fromInfo || fromInfo.stageId === toStageId) return;
     update(p => {
-      const from = p.stages.find(s => s.id === d.fromStage);
-      const fromIdx = from.tasks.findIndex(t => t.id === d.taskId);
-      const to = p.stages.find(s => s.id === sid);
-      if (targetTid && d.fromStage === sid) {
-        // same-stage reorder, direction-aware (fixes "can't drag down")
-        const targetIdx = to.tasks.findIndex(t => t.id === targetTid);
-        if (targetIdx === fromIdx) return p;
-        const [moved] = to.tasks.splice(fromIdx, 1);
-        to.tasks.splice(targetIdx, 0, moved); // indices already shifted when moving down → lands after target
-      } else {
-        const [moved] = from.tasks.splice(fromIdx, 1);
-        if (targetTid) {
-          const tIdx = to.tasks.findIndex(t => t.id === targetTid);
-          to.tasks.splice(tIdx, 0, moved);
-        } else to.tasks.push(moved);
-      }
+      const from = p.stages.find(s => s.id === fromInfo.stageId);
+      const to = p.stages.find(s => s.id === toStageId);
+      if (!from || !to) return p;
+      const idx = from.tasks.findIndex(t => t.id === fromInfo.taskId);
+      if (idx < 0) return p;
+      const [moved] = from.tasks.splice(idx, 1);
+      to.tasks.push(moved);
       return p;
     });
-    endDrag();
-  };
-
-  const dropStageOn = (targetSid) => {
-    const d = drag.current;
-    if (!d || d.type !== "stage" || d.stageId === targetSid) { endDrag(); return; }
-    update(p => {
-      const fromIdx = p.stages.findIndex(s => s.id === d.stageId);
-      const targetIdx = p.stages.findIndex(s => s.id === targetSid);
-      const [moved] = p.stages.splice(fromIdx, 1);
-      p.stages.splice(targetIdx, 0, moved); // direction-aware: works dragging up and down
-      return p;
-    });
-    endDrag();
   };
 
   const progress = useMemo(() => {
@@ -803,26 +787,27 @@ export default function App({ mode = "admin" }) {
 
           {sidebarOpen && page === "projects" && (
             <div style={{ paddingLeft: 10, marginBottom: 6 }}>
-              {projects.map(p => (
-                <button key={p.id} onClick={() => { setActiveId(p.id); go("projects"); }}
-                  draggable
-                  onDragStart={() => { projDrag.current = p.id; setProjDragId(p.id); }}
-                  onDragEnd={() => { setProjDragId(null); setProjDragOver(null); }}
-                  onDragOver={e => { e.preventDefault(); if (projDragId && projDragId !== p.id) setProjDragOver(p.id); }}
-                  onDrop={e => { e.preventDefault(); reorderProjects(p.id); }}
-                  style={{
-                  display: "block", width: "100%", textAlign: "left", padding: "8px 10px", marginBottom: 2,
-                  background: p.id === activeId && page === "projects" ? "rgba(217,138,95,.10)" : "transparent",
-                  border: "none",
-                  borderLeft: projDragOver === p.id ? `3px solid ${PALETTE.copper}` : p.id === activeId && page === "projects" ? `3px solid ${PALETTE.copper}` : "3px solid rgba(255,255,255,.08)",
-                  borderTop: projDragOver === p.id ? `2px solid ${PALETTE.copper}` : "2px solid transparent",
-                  borderRadius: 4, color: "inherit", cursor: "grab", fontFamily: "inherit",
-                  opacity: projDragId === p.id ? 0.5 : 1,
-                }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
-                  <div style={{ fontSize: 10.5, opacity: 0.55, marginTop: 1 }}>{p.client}</div>
-                </button>
-              ))}
+              <SortableList items={projects} onReorder={(ids) => reorderProjectsByIds(ids)}
+                renderItem={(p, { handleProps }) => (
+                  <div key={p.id} style={{
+                    display: "flex", alignItems: "center", gap: 4, marginBottom: 2,
+                    background: p.id === activeId && page === "projects" ? "rgba(217,138,95,.10)" : "transparent",
+                    borderLeft: p.id === activeId && page === "projects" ? `3px solid ${PALETTE.copper}` : "3px solid rgba(255,255,255,.08)",
+                    borderRadius: 4,
+                  }}>
+                    <span {...handleProps} title="Drag to reorder"
+                      style={{ ...handleProps.style, color: "inherit", opacity: 0.4, display: "flex", alignItems: "center", padding: "8px 2px 8px 6px", flexShrink: 0 }}>
+                      <Icon name="grip" size={13} style={{ verticalAlign: 0 }} />
+                    </span>
+                    <button onClick={() => { setActiveId(p.id); go("projects"); }} style={{
+                      flex: 1, minWidth: 0, textAlign: "left", padding: "8px 10px 8px 2px",
+                      background: "transparent", border: "none", color: "inherit", cursor: "pointer", fontFamily: "inherit",
+                    }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
+                      <div style={{ fontSize: 10.5, opacity: 0.55, marginTop: 1 }}>{p.client}</div>
+                    </button>
+                  </div>
+                )} />
               {showNewProject ? (
                 <div style={{ padding: 10, background: "rgba(255,255,255,.06)", borderRadius: 8, marginTop: 6 }}>
                   <input value={npName} onChange={e => setNpName(e.target.value)} placeholder="Project name"
@@ -863,7 +848,7 @@ export default function App({ mode = "admin" }) {
             background: "transparent", border: "none", borderRadius: 6, color: "inherit", cursor: "pointer", fontFamily: "inherit", fontSize: 13, opacity: 0.7 }}>
           <Icon name="externalLink" size={14} style={{ verticalAlign: 0, flexShrink: 0 }} />{sidebarOpen && <span>Sign out</span>}
         </button>
-        {sidebarOpen && <div style={{ padding: "12px 20px", fontSize: 10.5, opacity: 0.4 }}>Drag a stage card to reorder · hold anywhere on a task to drag it</div>}
+        {sidebarOpen && <div style={{ padding: "12px 20px", fontSize: 10.5, opacity: 0.4 }}>Drag the grip handle to reorder stages, tasks, and projects</div>}
       </aside>
 
       {/* Main */}
@@ -888,7 +873,7 @@ export default function App({ mode = "admin" }) {
               {/* Left: kicker + title on their own lines; actions in a fixed toolbar row below */}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 11.5, letterSpacing: 1.4, textTransform: "uppercase", color: T.inkSoft }}>{project.client}</div>
-                <h1 style={{ fontSize: 28, margin: "6px 0 0", fontWeight: 700, letterSpacing: "-0.015em", lineHeight: 1.25, overflowWrap: "break-word" }}>{project.name}</h1>
+                <h1 style={{ fontSize: isMobile ? 21 : 28, margin: "6px 0 0", fontWeight: 700, letterSpacing: "-0.015em", lineHeight: 1.25, overflowWrap: "break-word", wordBreak: "break-word" }}>{project.name}</h1>
                 <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap", minHeight: 30 }}>
                   {confirmDeleteProject ? (
                     <>
@@ -915,15 +900,15 @@ export default function App({ mode = "admin" }) {
               </div>
 
               {/* Right: metrics pinned top-right, never affected by title length */}
-              <div style={{ display: "flex", gap: 24, alignItems: "flex-start", flexShrink: 0, paddingTop: isMobile ? 0 : 22, textAlign: isMobile ? "left" : "right" }}>
+              <div style={{ display: "flex", gap: isMobile ? 16 : 24, alignItems: "flex-start", flexShrink: 0, paddingTop: isMobile ? 0 : 22, textAlign: isMobile ? "left" : "right" }}>
                 {avgCompletion !== null && (
                   <div>
-                    <div style={{ fontSize: 30, fontWeight: 700, lineHeight: 1, whiteSpace: "nowrap" }}>{avgCompletion}<span style={{ fontSize: 14, fontWeight: 500 }}>d</span></div>
+                    <div style={{ fontSize: isMobile ? 24 : 30, fontWeight: 700, lineHeight: 1, whiteSpace: "nowrap" }}>{avgCompletion}<span style={{ fontSize: 14, fontWeight: 500 }}>d</span></div>
                     <div style={{ fontSize: 11.5, color: T.inkSoft, whiteSpace: "nowrap" }}>avg time to complete</div>
                   </div>
                 )}
                 <div>
-                  <div style={{ fontSize: 30, fontWeight: 700, color: T.accent, lineHeight: 1 }}>{progress}%</div>
+                  <div style={{ fontSize: isMobile ? 24 : 30, fontWeight: 700, color: T.accent, lineHeight: 1 }}>{progress}%</div>
                   <div style={{ fontSize: 11.5, color: T.inkSoft, whiteSpace: "nowrap" }}>overall complete</div>
                 </div>
               </div>
@@ -947,7 +932,7 @@ export default function App({ mode = "admin" }) {
             <FinanceSection key={project.id} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
               finance={project.finance || []}
               addPayment={addPayment} deletePayment={deletePayment} savePayment={savePayment} markPaid={markPaid}
-              rejectPaymentReport={rejectPaymentReport}
+              rejectPaymentReport={rejectPaymentReport} reorderPayments={reorderPayments}
               inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
           ) : projTab === "access" ? (
             <AccessSection key={project.id} T={T} dark={dark} dangerColor={dangerColor}
@@ -955,16 +940,18 @@ export default function App({ mode = "admin" }) {
               addAccess={addAccess} saveAccess={saveAccess} deleteAccess={deleteAccess} reorderAccesses={reorderAccesses}
               inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
           ) : (<>
-          {/* Process spine */}
+          {/* Process spine — on mobile, labels are unreadable when squeezed into
+              many equal columns, so show just the progress bars there; the stage
+              cards below carry the names. */}
           <div style={{ display: "flex", gap: 6, margin: "22px 0 28px" }}>
             {project.stages.map((s, i) => {
               const pr = stageProgress(s);
               return (
-                <div key={s.id} style={{ flex: 1 }}>
+                <div key={s.id} style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ height: 6, borderRadius: 3, background: T.line, overflow: "hidden" }}>
                     <div style={{ width: `${pr * 100}%`, height: "100%", background: T.accent, transition: "width .3s" }} />
                   </div>
-                  <div style={{ fontSize: 11.5, marginTop: 6, color: pr === 1 ? T.accent : T.inkSoft, fontWeight: 600 }}>{i + 1}. {s.name}</div>
+                  {!isMobile && <div style={{ fontSize: 11.5, marginTop: 6, color: pr === 1 ? T.accent : T.inkSoft, fontWeight: 600 }}>{i + 1}. {s.name}</div>}
                 </div>
               );
             })}
@@ -992,28 +979,15 @@ export default function App({ mode = "admin" }) {
               </button>
             </div>
           )}
-          {project.stages.map(s => (
+          <SortableList items={project.stages} disabled={!!editingStage || !!editingTask}
+            onReorder={(ids) => reorderStagesByIds(ids)}
+            renderItem={(s, { handleProps }) => (
             <section key={s.id}
-              draggable={!editingStage && !editingTask}
-              onDragStart={e => {
-                // don't hijack task drags or text inputs
-                const tag = e.target.tagName;
-                if (e.target.dataset?.taskHandle || tag === "INPUT" || tag === "BUTTON" || tag === "TEXTAREA") { e.preventDefault(); return; }
-                startStageDrag(s.id);
-              }}
-              onDragEnd={endDrag}
-              onDragOver={e => { e.preventDefault(); if (dragType === "stage") setDragOver(s.id); }}
-              onDrop={e => {
-                e.preventDefault();
-                if (drag.current?.type === "stage") dropStageOn(s.id);
-                else if (drag.current?.type === "task") dropTaskOn(s.id, null);
-              }}
+              onDragOver={e => { if (taskDragFromStage.current) { e.preventDefault(); } }}
+              onDrop={e => { if (taskDragFromStage.current) { e.preventDefault(); moveTaskToStage(taskDragFromStage.current, s.id); } }}
               style={{
                 background: T.panel, borderRadius: 12, padding: "18px 20px", marginBottom: 16,
-                border: `1px solid ${dragOver === s.id && dragType === "stage" ? T.accent : T.line}`,
-                boxShadow: dragOver === s.id && dragType === "stage" ? `0 0 0 2px ${T.accent}` : "none",
-                opacity: dragType === "stage" && drag.current?.stageId === s.id ? 0.5 : 1,
-                cursor: "grab",
+                border: `1px solid ${T.line}`,
                 transition: "border-color .15s, box-shadow .15s, opacity .15s",
               }}>
               {/* Stage header */}
@@ -1028,6 +1002,10 @@ export default function App({ mode = "admin" }) {
                   </div>
                 ) : (
                   <>
+                    <span {...handleProps} title="Drag to reorder stage"
+                      style={{ ...handleProps.style, color: T.inkSoft, display: "flex", alignItems: "center", flexShrink: 0 }}>
+                      <Icon name="grip" size={15} style={{ verticalAlign: 0 }} />
+                    </span>
                     <button onClick={() => toggleStageCollapsed(s.id)} style={{ ...iconBtn, padding: "2px 4px", display: "flex" }}
                       title={collapsedStages[s.id] ? "Expand stage" : "Collapse stage"}>
                       <Icon name="chevron" size={15} style={{ verticalAlign: 0, transform: collapsedStages[s.id] ? "rotate(-90deg)" : "none", transition: "transform .15s" }} />
@@ -1051,31 +1029,18 @@ export default function App({ mode = "admin" }) {
                   {taskView === "active" ? "All tasks here are completed — switch to All or Completed to see them." : "No completed tasks in this stage yet."}
                 </div>
               )}
-              {viewTasks.map(t => (
-                <div key={t.id} data-task-handle="true"
-                  draggable={editingTask !== t.id}
-                  onDragStart={e => {
-                    // whole row is draggable; controls and inputs opt out
-                    const tag = e.target.tagName;
-                    if (tag === "INPUT" || tag === "BUTTON" || tag === "SELECT" || tag === "TEXTAREA" || e.target.closest?.("button")) { e.preventDefault(); return; }
-                    e.stopPropagation(); // don't trigger the stage drag
-                    startTaskDrag(s.id, t.id);
-                  }}
-                  onDragEnd={endDrag}
-                  onDragOver={e => {
-                    if (dragType === "task") { e.preventDefault(); e.stopPropagation(); setDragOver(t.id); }
-                    // stage drags fall through to the section handler
-                  }}
-                  onDrop={e => {
-                    if (drag.current?.type === "task") { e.preventDefault(); e.stopPropagation(); dropTaskOn(s.id, t.id); }
-                  }}
+              <SortableList items={viewTasks} disabled={taskView !== "all" || !!editingTask}
+                onReorder={(ids) => reorderTasksByIds(s.id, ids)}
+                renderItem={(t, { handleProps }) => (
+                <div key={t.id}
                   style={{
                     display: "flex", alignItems: "center", gap: 10, padding: "9px 0", flexWrap: "wrap", minHeight: 64,
-                    borderTop: `2px solid ${dragOver === t.id && dragType === "task" ? T.accent : T.line}`,
-                    cursor: "grab",
-                    opacity: dragType === "task" && drag.current?.taskId === t.id ? 0.5 : 1,
+                    borderTop: `2px solid ${T.line}`,
                   }}>
-                  <span style={{ color: T.inkSoft, userSelect: "none", display: "flex" }} title="Hold anywhere on the task to drag"><Icon name="grip" size={14} /></span>
+                  <span {...handleProps} title={taskView === "all" ? "Drag to reorder" : "Switch to All view to reorder"}
+                    style={{ ...(taskView === "all" && !editingTask ? handleProps.style : {}), color: T.inkSoft, userSelect: "none", display: "flex", opacity: taskView === "all" ? 1 : 0.3 }}>
+                    <Icon name="grip" size={14} />
+                  </span>
                   {editingTask === t.id ? (
                     <TaskEditForm task={t} onSave={(title, note, due, rec) => saveTaskEdit(s.id, t.id, title, note, due, rec)} onCancel={() => setEditingTask(null)} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} />
                   ) : (
@@ -1146,7 +1111,7 @@ export default function App({ mode = "admin" }) {
                     </>
                   )}
                 </div>
-              ))}
+              )} />
 
               {taskView !== "completed" && (
                 <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
@@ -1160,7 +1125,7 @@ export default function App({ mode = "admin" }) {
               </>); })()}
               </>)}
             </section>
-          ))}
+          )} />
 
           <div style={{ display: "flex", gap: 8, marginBottom: 28, flexWrap: "wrap" }}>
             <input value={newStage} onChange={e => setNewStage(e.target.value)} onKeyDown={e => e.key === "Enter" && addStage()}
@@ -1357,7 +1322,7 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, urgencyM
 }
 
 // ---------- Finance section (per project) ----------
-function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, deletePayment, savePayment, markPaid, rejectPaymentReport, inputStyle, primaryBtn, iconBtn, pillBase }) {
+function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, deletePayment, savePayment, markPaid, rejectPaymentReport, reorderPayments, inputStyle, primaryBtn, iconBtn, pillBase }) {
   const [filter, setFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
   const [payingId, setPayingId] = useState(null); // item being marked paid (method picker open)
@@ -1373,9 +1338,13 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
   const adsItems = finance.filter(f => f.category === "ads");
   const adsTotal = adsItems.reduce((s, f) => s + Number(f.amount || 0), 0);
 
+  const canReorder = filter === "all"; // manual drag order only in the unfiltered view
   const visible = finance
     .filter(f => filter === "all" ? true : filter === "overdue" ? isOverdue(f) : f.category === filter)
-    .sort((a, b) => (a.status === "paid") - (b.status === "paid") || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")));
+    // In "All", preserve the user's manual (drag) order. In filtered views, surface
+    // unpaid-first then by due date, since reordering a subset has no clear meaning.
+    .sort((a, b) => canReorder ? 0 : ((a.status === "paid") - (b.status === "paid") || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999"))));
+  const reorderPaymentsByIds = (orderedIds) => reorderPayments(orderedIds);
 
   const catColor = (f) => isOverdue(f) ? dangerColor : f.status === "paid" ? (dark ? "#9CC4A8" : "#3E7050") : T.accent;
 
@@ -1447,7 +1416,8 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
       {/* Payment list */}
       <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
         {visible.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No payments in this view.</div>}
-        {visible.map(f => (
+        <SortableList items={visible} disabled={!canReorder} onReorder={(ids) => reorderPaymentsByIds(ids)}
+          renderItem={(f, { handleProps }) => (
           <div key={f.id} style={{ padding: "12px 0", borderBottom: `1px solid ${T.line}` }}>
             {f.status === "pending" && f.clientReportedAt && editId !== f.id && (
               <div style={{
@@ -1469,6 +1439,11 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
               <PaymentForm initial={f} onSubmit={(patch) => { savePayment(f.id, patch); setEditId(null); }} onCancel={() => setEditId(null)} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />
             ) : (
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", minHeight: 56 }}>
+                {canReorder && (
+                  <span {...handleProps} title="Drag to reorder" style={{ ...handleProps.style, color: T.inkSoft, display: "flex", flexShrink: 0, userSelect: "none" }}>
+                    <Icon name="grip" size={14} />
+                  </span>
+                )}
                 <div style={{ width: 4, alignSelf: "stretch", borderRadius: 2, background: catColor(f) }} />
                 <div style={{ flex: 1, minWidth: 200 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 600, textDecoration: f.status === "paid" ? "line-through" : "none", color: f.status === "paid" ? T.inkSoft : T.ink }}>
@@ -1525,7 +1500,7 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
               </div>
             )}
           </div>
-        ))}
+        )} />
       </section>
     </div>
   );
@@ -1590,10 +1565,10 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
   const [editId, setEditId] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
   const [revealed, setRevealed] = useState({}); // id -> bool
-  const aDrag = useRef(null);
-  const [aDragId, setADragId] = useState(null);
-  const [aDragOver, setADragOver] = useState(null);
   const canReorder = filter === "all"; // ordering only meaningful on the unfiltered list
+  const reorderAccessesByIds = (orderedIds) => {
+    reorderAccesses(orderedIds); // parent reorders within active project + persists
+  };
 
   const visible = accesses.filter(a => filter === "all" ? true : a.category === filter);
 
@@ -1648,25 +1623,19 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
 
       <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
         {visible.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No accesses in this view.</div>}
-        {visible.map(a => (
+        <SortableList items={visible} disabled={!canReorder} onReorder={(ids) => reorderAccessesByIds(ids)}
+          renderItem={(a, { handleProps }) => (
           <div key={a.id}
-            draggable={canReorder && editId !== a.id}
-            onDragStart={e => { if (!canReorder) return; aDrag.current = a.id; setADragId(a.id); }}
-            onDragEnd={() => { setADragId(null); setADragOver(null); }}
-            onDragOver={e => { if (canReorder && aDragId && aDragId !== a.id) { e.preventDefault(); setADragOver(a.id); } }}
-            onDrop={e => { if (canReorder && aDrag.current) { e.preventDefault(); reorderAccesses(aDrag.current, a.id); setADragId(null); setADragOver(null); } }}
             style={{
               padding: "12px 0",
               borderBottom: `1px solid ${T.line}`,
-              borderTop: aDragOver === a.id ? `2px solid ${T.accent}` : "2px solid transparent",
-              opacity: aDragId === a.id ? 0.5 : 1,
             }}>
             {editId === a.id ? (
               <AccessForm initial={a} onSubmit={(patch) => { saveAccess(a.id, patch); setEditId(null); }} onCancel={() => setEditId(null)} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />
             ) : (
               <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                 {canReorder && (
-                  <span title="Drag to reorder" style={{ color: T.inkSoft, cursor: "grab", display: "flex", paddingTop: 2, userSelect: "none" }}>
+                  <span {...handleProps} title="Drag to reorder" style={{ ...handleProps.style, color: T.inkSoft, display: "flex", paddingTop: 2, userSelect: "none" }}>
                     <Icon name="grip" size={14} />
                   </span>
                 )}
@@ -1697,7 +1666,7 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
               </div>
             )}
           </div>
-        ))}
+        )} />
       </section>
       <p style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 10 }}>
         Credentials are stored in plain text in this prototype. Before storing real passwords, this section needs encrypted storage.
@@ -1740,23 +1709,13 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
   const [editId, setEditId] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
   const [resetSent, setResetSent] = useState(null); // client id, transient confirmation
-  const cDrag = useRef(null);
-  const [cDragId, setCDragId] = useState(null);
-  const [cDragOver, setCDragOver] = useState(null);
-  const reorderClients = (toId) => {
-    const fromId = cDrag.current;
-    if (!fromId || fromId === toId) { setCDragId(null); setCDragOver(null); return; }
+  const reorderClientsByIds = (orderedIds) => {
     setClients(cs => {
-      const arr = [...cs];
-      const from = arr.findIndex(c => c.id === fromId);
-      const to = arr.findIndex(c => c.id === toId);
-      if (from < 0 || to < 0) return cs;
-      const [moved] = arr.splice(from, 1);
-      arr.splice(to, 0, moved);
-      db.reorderClients(arr.map(c => c.id)).catch(e => console.error("reorder clients failed", e));
-      return arr;
+      const byId = Object.fromEntries(cs.map(c => [c.id, c]));
+      const next = orderedIds.map(id => byId[id]).filter(Boolean);
+      db.reorderClients(orderedIds).catch(e => console.error("reorder clients failed", e));
+      return next;
     });
-    setCDragId(null); setCDragOver(null);
   };
 
   const statusStyle = (s) => s === "active"
@@ -1806,27 +1765,17 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
 
       <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
         {clients.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No clients yet.</div>}
-        {clients.map(c => {
+        <SortableList items={clients} onReorder={(ids) => reorderClientsByIds(ids)}
+          renderItem={(c, { handleProps }) => {
           const st = statusStyle(c.status);
           const projList = projectsOf(c);
           return (
-            <div key={c.id}
-              draggable={editId !== c.id}
-              onDragStart={() => { cDrag.current = c.id; setCDragId(c.id); }}
-              onDragEnd={() => { setCDragId(null); setCDragOver(null); }}
-              onDragOver={e => { if (cDragId && cDragId !== c.id) { e.preventDefault(); setCDragOver(c.id); } }}
-              onDrop={e => { if (cDrag.current) { e.preventDefault(); reorderClients(c.id); } }}
-              style={{
-                padding: "14px 0",
-                borderBottom: `1px solid ${T.line}`,
-                borderTop: cDragOver === c.id ? `2px solid ${T.accent}` : "2px solid transparent",
-                opacity: cDragId === c.id ? 0.5 : 1,
-              }}>
+            <div key={c.id} style={{ padding: "14px 0", borderBottom: `1px solid ${T.line}` }}>
               {editId === c.id ? (
                 <ClientForm initial={c} onSubmit={(p) => { patch(c.id, () => p); setEditId(null); }} onCancel={() => setEditId(null)} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />
               ) : (
                 <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                  <span title="Drag to reorder" style={{ color: T.inkSoft, cursor: "grab", display: "flex", flexShrink: 0, userSelect: "none" }}>
+                  <span {...handleProps} title="Drag to reorder" style={{ ...handleProps.style, color: T.inkSoft, display: "flex", flexShrink: 0, userSelect: "none" }}>
                     <Icon name="grip" size={14} />
                   </span>
                   <div style={{
@@ -1891,7 +1840,7 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
               )}
             </div>
           );
-        })}
+        }} />
       </section>
     </main>
   );
