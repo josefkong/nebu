@@ -1,15 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-
-// ===== PREVIEW-ONLY SHIM (not for deploy) =====
-const supabase = { auth: { signOut: () => {}, resetPasswordForEmail: async () => {} } };
-const noop = async () => {};
-const db = new Proxy({}, { get: () => noop });
-async function loadProjects() { return []; }
-async function persistProject() {}
-function SortableList({ items, renderItem }) {
-  return <>{items.map((it) => renderItem(it, { handleProps: { style: { cursor: "grab" } }, isDragging: false }))}</>;
-}
-// =============================================
+import { loadProjects, persistProject, db } from "./lib/db.js";
+import { supabase } from "./lib/supabase.js";
+import SortableList from "./lib/SortableList.jsx";
 
 // ---------- Nebu brand palette ----------
 // Premium tech-marketing identity: graphite base, warm platinum text,
@@ -410,10 +402,28 @@ export default function App({ mode = "admin" }) {
   const STATUS = statusFor(T, dark);
   const URGENCY = urgencyFor(T, dark);
 
-  const [projects, setProjects] = useState(seed);
-  const [activeId, setActiveId] = useState(seed[0]?.id || null);
+  const [projects, setProjects] = useState([]);
+  const [activeId, setActiveId] = useState(null);
   const [loadError, setLoadError] = useState("");
-  const [loadingData, setLoadingData] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
+
+  // Load everything from Supabase on mount.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const rows = await loadProjects();
+        if (!alive) return;
+        setProjects(rows);
+        setActiveId(rows[0]?.id || null);
+      } catch (e) {
+        if (alive) setLoadError(e.message || "Failed to load data");
+      } finally {
+        if (alive) setLoadingData(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
   const [newTask, setNewTask] = useState({});
   const [newStage, setNewStage] = useState("");
   const [stageTemplate, setStageTemplate] = useState("blank"); // 'blank' or a STAGE_TEMPLATES key
@@ -427,7 +437,8 @@ export default function App({ mode = "admin" }) {
   const [showNewProject, setShowNewProject] = useState(false);
   const [page, setPage] = useState("projects");
   const [projTab, setProjTab] = useState("work"); // work | finance | access inside a project
-  const [clients, setClients] = useState(seedClients);
+  const [clients, setClients] = useState([]);
+  useEffect(() => { db.loadClients().then(setClients).catch(() => {}); }, []);
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(typeof window !== "undefined" ? window.innerWidth >= MOBILE_BP : true);
   // navigating on mobile closes the drawer so content gets the full screen
@@ -574,11 +585,16 @@ export default function App({ mode = "admin" }) {
     p.accesses = orderedIds.map(id => byId[id]).filter(Boolean);
     return p; // persistProject writes new positions by array index
   });
-  const addProject = () => {
+  const addProject = async () => {
     if (!npName.trim()) return;
-    const p = { id: uid(), name: npName.trim(), client: npClient.trim() || "—", contact: "", stages: [{ id: uid(), name: "Discovery", tasks: [] }], activity: [], finance: [], accesses: [] };
-    setProjects(ps => [...ps, p]); setActiveId(p.id);
+    const name = npName.trim(); const client = npClient.trim() || "—";
     setShowNewProject(false); setNpName(""); setNpClient("");
+    try {
+      const id = await db.createProject({ name, client });
+      const fresh = await loadProjects();
+      setProjects(fresh);
+      setActiveId(id);
+    } catch (e) { console.error("create project failed", e); }
   };
 
   // ----- finance operations -----
