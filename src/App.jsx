@@ -1,7 +1,15 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { loadProjects, persistProject, db } from "./lib/db.js";
-import { supabase } from "./lib/supabase.js";
-import SortableList from "./lib/SortableList.jsx";
+
+// ===== PREVIEW-ONLY SHIM (not for deploy) =====
+const supabase = { auth: { signOut: () => {}, resetPasswordForEmail: async () => {} } };
+const noop = async () => {};
+const db = new Proxy({}, { get: () => noop });
+async function loadProjects() { return []; }
+async function persistProject() {}
+function SortableList({ items, renderItem }) {
+  return <>{items.map((it) => renderItem(it, { handleProps: { style: { cursor: "grab" } }, isDragging: false }))}</>;
+}
+// =============================================
 
 // ---------- Nebu brand palette ----------
 // Premium tech-marketing identity: graphite base, warm platinum text,
@@ -402,28 +410,10 @@ export default function App({ mode = "admin" }) {
   const STATUS = statusFor(T, dark);
   const URGENCY = urgencyFor(T, dark);
 
-  const [projects, setProjects] = useState([]);
-  const [activeId, setActiveId] = useState(null);
+  const [projects, setProjects] = useState(seed);
+  const [activeId, setActiveId] = useState(seed[0]?.id || null);
   const [loadError, setLoadError] = useState("");
-  const [loadingData, setLoadingData] = useState(true);
-
-  // Load everything from Supabase on mount.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const rows = await loadProjects();
-        if (!alive) return;
-        setProjects(rows);
-        setActiveId(rows[0]?.id || null);
-      } catch (e) {
-        if (alive) setLoadError(e.message || "Failed to load data");
-      } finally {
-        if (alive) setLoadingData(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
+  const [loadingData, setLoadingData] = useState(false);
   const [newTask, setNewTask] = useState({});
   const [newStage, setNewStage] = useState("");
   const [stageTemplate, setStageTemplate] = useState("blank"); // 'blank' or a STAGE_TEMPLATES key
@@ -437,8 +427,7 @@ export default function App({ mode = "admin" }) {
   const [showNewProject, setShowNewProject] = useState(false);
   const [page, setPage] = useState("projects");
   const [projTab, setProjTab] = useState("work"); // work | finance | access inside a project
-  const [clients, setClients] = useState([]);
-  useEffect(() => { db.loadClients().then(setClients).catch(() => {}); }, []);
+  const [clients, setClients] = useState(seedClients);
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(typeof window !== "undefined" ? window.innerWidth >= MOBILE_BP : true);
   // navigating on mobile closes the drawer so content gets the full screen
@@ -585,16 +574,11 @@ export default function App({ mode = "admin" }) {
     p.accesses = orderedIds.map(id => byId[id]).filter(Boolean);
     return p; // persistProject writes new positions by array index
   });
-  const addProject = async () => {
+  const addProject = () => {
     if (!npName.trim()) return;
-    const name = npName.trim(); const client = npClient.trim() || "—";
+    const p = { id: uid(), name: npName.trim(), client: npClient.trim() || "—", contact: "", stages: [{ id: uid(), name: "Discovery", tasks: [] }], activity: [], finance: [], accesses: [] };
+    setProjects(ps => [...ps, p]); setActiveId(p.id);
     setShowNewProject(false); setNpName(""); setNpClient("");
-    try {
-      const id = await db.createProject({ name, client });
-      const fresh = await loadProjects();
-      setProjects(fresh);
-      setActiveId(id);
-    } catch (e) { console.error("create project failed", e); }
   };
 
   // ----- finance operations -----
@@ -721,7 +705,7 @@ export default function App({ mode = "admin" }) {
   if (loadError) return <CenterMsg>Could not connect to the database. {loadError}</CenterMsg>;
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: FONT_STACK, transition: "background .25s, color .25s" }}>
+    <div style={{ display: "flex", minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: FONT_STACK, transition: "background .25s, color .25s", overflowX: "hidden", maxWidth: "100vw" }}>
       {/* Native date-picker calendar icon is dark; invert it in dark mode so it stays visible */}
       <style>{`
         ${FONT_IMPORT}
@@ -1034,69 +1018,81 @@ export default function App({ mode = "admin" }) {
                 renderItem={(t, { handleProps }) => (
                 <div key={t.id}
                   style={{
-                    display: "flex", alignItems: "center", gap: 10, padding: "9px 0", flexWrap: "wrap", minHeight: 64,
+                    display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 10, padding: "9px 0", flexWrap: "wrap", minHeight: isMobile ? 0 : 64,
+                    flexDirection: isMobile ? "column" : "row",
                     borderTop: `2px solid ${T.line}`,
                   }}>
-                  <span {...handleProps} title={taskView === "all" ? "Drag to reorder" : "Switch to All view to reorder"}
-                    style={{ ...(taskView === "all" && !editingTask ? handleProps.style : {}), color: T.inkSoft, userSelect: "none", display: "flex", opacity: taskView === "all" ? 1 : 0.3 }}>
-                    <Icon name="grip" size={14} />
-                  </span>
                   {editingTask === t.id ? (
-                    <TaskEditForm task={t} onSave={(title, note, due, rec) => saveTaskEdit(s.id, t.id, title, note, due, rec)} onCancel={() => setEditingTask(null)} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} />
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 10, width: "100%" }}>
+                      <span style={{ color: T.inkSoft, display: "flex", flexShrink: 0, opacity: 0.3, paddingTop: 2 }}>
+                        <Icon name="grip" size={14} />
+                      </span>
+                      <TaskEditForm task={t} onSave={(title, note, due, rec) => saveTaskEdit(s.id, t.id, title, note, due, rec)} onCancel={() => setEditingTask(null)} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} />
+                    </div>
                   ) : (
                     <>
-                      <div style={{ flex: 1, minWidth: 160 }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 500, textDecoration: t.status === "done" ? "line-through" : "none", color: t.status === "done" ? T.inkSoft : T.ink }}>
-                          {t.title}
-                          {t.guide && (
-                            <button onClick={() => setExpandedGuide(g => g === t.id ? null : t.id)}
-                              title={expandedGuide === t.id ? "Hide how-to guide" : "How to perform this task"}
-                              style={{ border: "none", background: "transparent", cursor: "pointer", padding: "0 4px", marginLeft: 4, color: expandedGuide === t.id ? T.accent : T.inkSoft, display: "inline-flex", verticalAlign: "-1px" }}>
-                              <Icon name="info" size={13} style={{ verticalAlign: 0 }} />
-                            </button>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2, minHeight: 15 }}>{t.note || "\u00a0"}</div>
-                        <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3, opacity: 0.85 }}>
-                          Created {fmtDate(t.createdAt)}
-                          {t.recurrence && t.recurrence !== "none" && (
-                            <> · <span style={{ color: T.accent, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "bottom" }}><Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence]}</span>{t.dueDate ? <> · next {fmtDate(t.dueDate)}</> : null}{t.lastDone ? <> · last done {fmtDate(t.lastDone)}</> : null}</>
-                          )}
-                          {t.dueDate && t.status !== "done" && (!t.recurrence || t.recurrence === "none") && (
-                            <> · <span style={{ color: t.dueDate < todayStr ? dangerColor : T.inkSoft, fontWeight: t.dueDate < todayStr ? 700 : 400 }}>
-                              {t.dueDate < todayStr ? "Overdue — was due" : "Due"} {fmtDate(t.dueDate)}
-                            </span></>
-                          )}
-                          {(!t.recurrence || t.recurrence === "none") && (t.completedAt
-                            ? <> · Completed {fmtDate(t.completedAt)} · <span style={{ color: T.accent, fontWeight: 600 }}>took {durationLabel(daysBetween(t.createdAt, t.completedAt))}</span></>
-                            : <> · open for {durationLabel(daysBetween(t.createdAt, new Date().toISOString()))}</>)}
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, width: isMobile ? "100%" : "auto", flex: isMobile ? "none" : 1, minWidth: 0 }}>
+                        <span {...handleProps} title={taskView === "all" ? "Drag to reorder" : "Switch to All view to reorder"}
+                          style={{ ...(taskView === "all" ? handleProps.style : {}), color: T.inkSoft, userSelect: "none", display: "flex", flexShrink: 0, opacity: taskView === "all" ? 1 : 0.3 }}>
+                          <Icon name="grip" size={14} />
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13.5, fontWeight: 500, textDecoration: t.status === "done" ? "line-through" : "none", color: t.status === "done" ? T.inkSoft : T.ink }}>
+                            {t.title}
+                            {t.guide && (
+                              <button onClick={() => setExpandedGuide(g => g === t.id ? null : t.id)}
+                                title={expandedGuide === t.id ? "Hide how-to guide" : "How to perform this task"}
+                                style={{ border: "none", background: "transparent", cursor: "pointer", padding: "0 4px", marginLeft: 4, color: expandedGuide === t.id ? T.accent : T.inkSoft, display: "inline-flex", verticalAlign: "-1px" }}>
+                                <Icon name="info" size={13} style={{ verticalAlign: 0 }} />
+                              </button>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2, minHeight: 15 }}>{t.note || "\u00a0"}</div>
+                          <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3, opacity: 0.85 }}>
+                            Created {fmtDate(t.createdAt)}
+                            {t.recurrence && t.recurrence !== "none" && (
+                              <> · <span style={{ color: T.accent, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "bottom" }}><Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence]}</span>{t.dueDate ? <> · next {fmtDate(t.dueDate)}</> : null}{t.lastDone ? <> · last done {fmtDate(t.lastDone)}</> : null}</>
+                            )}
+                            {t.dueDate && t.status !== "done" && (!t.recurrence || t.recurrence === "none") && (
+                              <> · <span style={{ color: t.dueDate < todayStr ? dangerColor : T.inkSoft, fontWeight: t.dueDate < todayStr ? 700 : 400 }}>
+                                {t.dueDate < todayStr ? "Overdue — was due" : "Due"} {fmtDate(t.dueDate)}
+                              </span></>
+                            )}
+                            {(!t.recurrence || t.recurrence === "none") && (t.completedAt
+                              ? <> · Completed {fmtDate(t.completedAt)} · <span style={{ color: T.accent, fontWeight: 600 }}>took {durationLabel(daysBetween(t.createdAt, t.completedAt))}</span></>
+                              : <> · open for {durationLabel(daysBetween(t.createdAt, new Date().toISOString()))}</>)}
+                          </div>
                         </div>
                       </div>
+                      <div style={isMobile
+                        ? { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6, width: "100%", marginTop: 6 }
+                        : { display: "contents" }}>
                       {t.target != null && (
-                        <span title="Acquisition counter" style={{ ...pillBase, cursor: "default", border: `1px solid ${(t.count || 0) >= t.target ? T.accent : T.line}`, color: (t.count || 0) >= t.target ? T.accent : T.inkSoft, background: (t.count || 0) >= t.target ? T.accentSoft : "transparent", display: "inline-flex", alignItems: "center", gap: 7 }}>
+                        <span title="Acquisition counter" style={{ ...pillBase, cursor: "default", border: `1px solid ${(t.count || 0) >= t.target ? T.accent : T.line}`, color: (t.count || 0) >= t.target ? T.accent : T.inkSoft, background: (t.count || 0) >= t.target ? T.accentSoft : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
                           <button onClick={() => incCount(s.id, t.id, -1)} title="Decrease" style={{ border: "none", background: "transparent", color: "inherit", cursor: "pointer", padding: 0, fontSize: 13, fontWeight: 800, lineHeight: 1, fontFamily: "inherit" }}>-</button>
                           {(t.count || 0)}/{t.target}
                           <button onClick={() => incCount(s.id, t.id, 1)} title="Increase" style={{ border: "none", background: "transparent", color: "inherit", cursor: "pointer", padding: 0, fontSize: 13, fontWeight: 800, lineHeight: 1, fontFamily: "inherit" }}>+</button>
                         </span>
                       )}
                       <button onClick={() => cycleRecurrence(s.id, t.id)} title={t.recurrence !== "none" ? `Repeats ${RECURRENCE[t.recurrence || "none"].toLowerCase()} — click to change` : "One-time task — click to make it recurring"}
-                        style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: isMobile ? "8px 10px" : "3px 10px" }}>
                         <Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence || "none"]}
                       </button>
                       <button onClick={() => cycleUrgency(s.id, t.id)} title="Click to cycle urgency"
-                        style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg }}>
+                        style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: isMobile ? "8px 10px" : "3px 10px" }}>
                         {URGENCY[t.urgency].label}
                       </button>
                       <button onClick={() => cycleStatus(s.id, t.id)} title="Click to cycle status"
-                        style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg }}>
+                        style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: isMobile ? "8px 10px" : "3px 10px" }}>
                         {STATUS[t.status].label}
                       </button>
                       <button onClick={() => toggleVis(s.id, t.id)} title={t.clientVisible ? "Visible to client" : "Internal only"}
-                        style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent" }}>
+                        style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: isMobile ? "8px 10px" : "3px 10px" }}>
                         {t.clientVisible ? "Client sees this" : "Internal"}
                       </button>
-                      <button onClick={() => setEditingTask(t.id)} style={iconBtn} title="Edit task"><Icon name="edit" size={12} /></button>
-                      <button onClick={() => deleteTask(s.id, t.id)} style={{ ...iconBtn, color: dangerColor }} title="Delete task"><Icon name="x" size={13} /></button>
+                      <button onClick={() => setEditingTask(t.id)} style={isMobile ? { ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 10px" } : iconBtn} title="Edit task"><Icon name="edit" size={12} />{isMobile && <span>Edit</span>}</button>
+                      <button onClick={() => deleteTask(s.id, t.id)} style={isMobile ? { ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 10px" } : { ...iconBtn, color: dangerColor }} title="Delete task"><Icon name="x" size={13} />{isMobile && <span>Delete</span>}</button>
+                      </div>
                       {t.guide && expandedGuide === t.id && (
                         <div style={{
                           flexBasis: "100%", background: T.accentSoft, border: `1px solid ${T.accent}`,
@@ -1346,7 +1342,22 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
     .sort((a, b) => canReorder ? 0 : ((a.status === "paid") - (b.status === "paid") || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999"))));
   const reorderPaymentsByIds = (orderedIds) => reorderPayments(orderedIds);
 
-  const catColor = (f) => isOverdue(f) ? dangerColor : f.status === "paid" ? (dark ? "#9CC4A8" : "#3E7050") : T.accent;
+  // Side-bar color = payment urgency by due date, so the visual priority is obvious:
+  //   paid        → green (settled, nothing to do)
+  //   no due date → neutral line (nothing to anchor urgency to)
+  //   3+ days out → green
+  //   1–2 days    → amber (caution)
+  //   due today or overdue → red
+  const FIN_GREEN = dark ? "#9CC4A8" : "#3E7050";
+  const FIN_AMBER = dark ? "#E0B45C" : "#B5852A";
+  const catColor = (f) => {
+    if (f.status === "paid") return FIN_GREEN;
+    if (!f.dueDate) return T.line;
+    const days = Math.round((new Date(f.dueDate) - new Date(todayStr)) / 86400000);
+    if (days <= 0) return dangerColor;   // due today or overdue
+    if (days < 3) return FIN_AMBER;      // 1–2 days out
+    return FIN_GREEN;                    // 3+ days out
+  };
 
   // Standardized summary card: identical fixed height, centered content — content changes can never reflow the row
   const summaryCard = {
@@ -1578,10 +1589,10 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
     return (
       <>
         <span style={{ color: T.inkSoft, fontSize: 11.5 }}>{label}</span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 2, minHeight: 22 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 2, minHeight: 22, minWidth: 0, flexWrap: "wrap" }}>
           {value ? (
             <>
-              <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11.5, letterSpacing: shown ? 0 : 1.5 }}>
+              <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11.5, letterSpacing: shown ? 0 : 1.5, overflowWrap: "anywhere", wordBreak: "break-word", minWidth: 0 }}>
                 {shown ? value : "\u2022".repeat(Math.min(value.length, 10))}
               </span>
               {secret && (
@@ -1644,7 +1655,7 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
                     <span style={{ fontSize: 13.5, fontWeight: 600 }}>{a.label}</span>
                     <span style={{ ...pillBase, cursor: "default", border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", fontSize: 10 }}>{ACCESS_CATEGORIES[a.category]}</span>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "72px 1fr", rowGap: 2, alignItems: "center" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "72px minmax(0, 1fr)", rowGap: 2, alignItems: "center" }}>
                     <Field label="Login" value={a.username} id={a.id + "u"} />
                     <Field label="Password" value={a.password} secret id={a.id} />
                     <Field label="URL" value={a.url} link id={a.id + "l"} />
@@ -2059,7 +2070,14 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
               {finance.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No payments scheduled.</div>}
               {[...finance].sort((a, b) => (a.status === "paid") - (b.status === "paid") || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999"))).map(f => (
                 <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${T.line}`, flexWrap: "wrap" }}>
-                  <div style={{ width: 4, alignSelf: "stretch", borderRadius: 2, background: isOverdue(f) ? dangerColor : f.status === "paid" ? (dark ? "#9CC4A8" : "#3E7050") : T.accent }} />
+                  <div style={{ width: 4, alignSelf: "stretch", borderRadius: 2, background: (() => {
+                    if (f.status === "paid") return dark ? "#9CC4A8" : "#3E7050";
+                    if (!f.dueDate) return T.line;
+                    const days = Math.round((new Date(f.dueDate) - new Date(todayStr)) / 86400000);
+                    if (days <= 0) return dangerColor;
+                    if (days < 3) return dark ? "#E0B45C" : "#B5852A";
+                    return dark ? "#9CC4A8" : "#3E7050";
+                  })() }} />
                   <div style={{ flex: 1, minWidth: 200 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, textDecoration: f.status === "paid" ? "line-through" : "none", color: f.status === "paid" ? T.inkSoft : T.ink }}>{f.title}</div>
                     <div style={{ fontSize: 11, color: T.inkSoft, marginTop: 3 }}>
