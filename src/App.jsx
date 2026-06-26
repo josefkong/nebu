@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { loadProjects, persistProject, db } from "./lib/db.js";
 import { supabase } from "./lib/supabase.js";
 import SortableList from "./lib/SortableList.jsx";
+import SettingsPanel from "./SettingsPanel.jsx";
 
 // ---------- Nebu brand palette ----------
 // Premium tech-marketing identity: graphite base, warm platinum text,
@@ -834,6 +835,15 @@ export default function App({ mode = "admin" }) {
             fontSize: 13, fontWeight: page === "clients" ? 700 : 500, opacity: page === "clients" ? 1 : 0.75,
           }}><Icon name="users" size={14} style={{ verticalAlign: 0, flexShrink: 0 }} />{sidebarOpen && <span>Clients</span>}</button>
 
+          {/* Settings */}
+          <button onClick={() => go("settings")} title="Settings" style={{
+            display: "flex", alignItems: "center", justifyContent: sidebarOpen ? "flex-start" : "center", gap: 9,
+            width: "100%", padding: sidebarOpen ? "9px 12px" : "10px 0", marginBottom: 4,
+            background: page === "settings" ? "rgba(217,138,95,.12)" : "transparent",
+            border: "none", borderRadius: 6, color: "inherit", cursor: "pointer", fontFamily: "inherit",
+            fontSize: 13, fontWeight: page === "settings" ? 700 : 500, opacity: page === "settings" ? 1 : 0.75,
+          }}><Icon name="key" size={14} style={{ verticalAlign: 0, flexShrink: 0 }} />{sidebarOpen && <span>Settings</span>}</button>
+
           {!sidebarOpen && (
             <button onClick={() => setDark(d => !d)} title="Toggle theme" style={{
               display: "flex", alignItems: "center", justifyContent: "center", width: "100%", padding: "10px 0",
@@ -858,6 +868,12 @@ export default function App({ mode = "admin" }) {
           allPending={allPending} urgencyMap={URGENCY}
           openProject={(pid) => { setActiveId(pid); setPage("projects"); }}
         />
+      ) : page === "settings" ? (
+        <main style={{ flex: 1, padding: isMobile ? "18px 14px" : "30px 36px", maxWidth: 900, minWidth: 0 }}>
+          <h1 style={{ fontSize: isMobile ? 22 : 28, margin: "0 0 6px", fontWeight: 700, letterSpacing: "-0.015em" }}>Settings</h1>
+          <p style={{ fontSize: 12, color: T.inkSoft, margin: "0 0 20px" }}>Manage your own account. These changes affect only your login.</p>
+          <SettingsPanel T={T} dark={dark} dangerColor={dangerColor} isMobile={isMobile} inputStyle={inputStyle} primaryBtn={primaryBtn} ghostBtn={ghostBtn} />
+        </main>
       ) : page === "clients" ? (
         <ClientsPage T={T} dark={dark} dangerColor={dangerColor} clients={clients} setClients={setClients}
           reloadClients={() => db.loadClients().then(setClients).catch(() => {})}
@@ -1901,6 +1917,8 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
   const [reportingId, setReportingId] = useState(null); // payment being reported (method picker open)
   const [reportMethod, setReportMethod] = useState(PAY_METHODS[0]);
   const [taskView, setTaskView] = useState("active"); // active | all | completed
+  const [showSettings, setShowSettings] = useState(false); // account settings view (real login only)
+  const isRealLogin = exitLabel === "Sign out";
 
   // Defensive guard: during state updates `project` can briefly be undefined.
   // Never crash the whole app over a transient render — show a calm fallback.
@@ -1958,9 +1976,25 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
               {projects.map(p => <option key={p.id} value={p.id} style={{ color: "#111" }}>{p.name}</option>)}
             </select>
           )}
+          {isRealLogin && (
+            <button onClick={() => setShowSettings(s => !s)} title="Account settings"
+              style={{ border: `1px solid ${dark ? "#0D0F13" : "#fff"}`, background: showSettings ? (dark ? "#0D0F13" : "#fff") : "transparent", color: showSettings ? T.accent : "inherit", borderRadius: 6, padding: "4px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <Icon name="key" size={11} style={{ verticalAlign: 0 }} />{showSettings ? "Back" : "Settings"}
+            </button>
+          )}
           <button onClick={onExit} style={{ border: `1px solid ${dark ? "#0D0F13" : "#fff"}`, background: "transparent", color: "inherit", borderRadius: 6, padding: "4px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{exitLabel}</button>
         </span>
       </div>
+
+      {showSettings ? (
+        <main style={{ maxWidth: 600, margin: "0 auto", padding: isMobile ? "20px 16px 48px" : "32px 24px 60px" }}>
+          <h1 style={{ fontSize: isMobile ? 21 : 26, margin: "0 0 6px", fontWeight: 700, letterSpacing: "-0.015em" }}>Account settings</h1>
+          <p style={{ fontSize: 12, color: T.inkSoft, margin: "0 0 22px" }}>Manage your login for {project.client}.</p>
+          <SettingsPanel T={T} dark={dark} dangerColor={dangerColor} isMobile={isMobile}
+            inputStyle={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }}
+            primaryBtn={{ padding: "8px 14px", borderRadius: 8, border: "none", background: T.accent, color: dark ? "#0D0F13" : "#fff", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }} />
+        </main>
+      ) : (<>
 
       {/* Portal header */}
       <header style={{ background: T.sidebar, color: "#ECEAE4", padding: "26px 0" }}>
@@ -2140,6 +2174,7 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
 
         <p style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 18, textAlign: "center" }}>Powered by Nebu</p>
       </main>
+      </>)}
     </div>
   );
 }
