@@ -415,6 +415,14 @@ export default function App({ mode = "admin" }) {
       try {
         const rows = await loadProjects();
         if (!alive) return;
+        // Admin only: hydrate private meeting notes (RLS returns nothing for clients).
+        if (mode === "admin") {
+          const ids = rows.flatMap(p => (p.meetings || []).map(m => m.id));
+          if (ids.length) {
+            const notesById = await db.loadMeetingNotes(ids);
+            rows.forEach(p => (p.meetings || []).forEach(m => { m.notes = notesById[m.id] || ""; }));
+          }
+        }
         setProjects(rows);
         setActiveId(rows[0]?.id || null);
       } catch (e) {
@@ -580,6 +588,26 @@ export default function App({ mode = "admin" }) {
   const addAccess = (item) => update(p => { (p.accesses = p.accesses || []).push(mkAccess(item)); return p; });
   const saveAccess = (aid, patch) => update(p => { const a = (p.accesses || []).find(a => a.id === aid); if (a) Object.assign(a, patch); return p; });
   const deleteAccess = (aid) => { update(p => { p.accesses = (p.accesses || []).filter(a => a.id !== aid); return p; }); db.deleteAccess(aid).catch(e => console.error(e)); };
+
+  // ----- meetings (facts persist via update(); private notes via dedicated calls) -----
+  const addMeeting = async (item) => {
+    if (!activeId) return;
+    try {
+      const id = await db.createMeeting(activeId, { ...item, position: (project?.meetings?.length || 0) });
+      setProjects(ps => ps.map(p => p.id === activeId
+        ? { ...p, meetings: [...(p.meetings || []), { id, title: item.title || "", meetingDate: item.meetingDate || null, agenda: item.agenda || "", links: item.links || "", clientVisible: item.clientVisible ?? true, notes: item.notes || "" }] }
+        : p));
+    } catch (e) { console.error("create meeting failed", e); }
+  };
+  const saveMeeting = (mid, patch) => {
+    update(p => { const m = (p.meetings || []).find(m => m.id === mid); if (m) Object.assign(m, patch); return p; });
+    // notes (and any field) also written through updateMeeting so the private table stays in sync
+    db.updateMeeting(mid, patch).catch(e => console.error("update meeting failed", e));
+  };
+  const deleteMeeting = (mid) => {
+    update(p => { p.meetings = (p.meetings || []).filter(m => m.id !== mid); return p; });
+    db.deleteMeeting(mid).catch(e => console.error(e));
+  };
   const reorderAccesses = (orderedIds) => update(p => {
     const arr = p.accesses || [];
     const byId = Object.fromEntries(arr.map(a => [a.id, a]));
@@ -933,7 +961,7 @@ export default function App({ mode = "admin" }) {
 
           {/* Work / Finance tab switcher */}
           <div style={{ display: "flex", gap: 4, margin: "18px 0 0", borderBottom: `1px solid ${T.line}` }}>
-            {[["work", "Workflow"], ["finance", "Finance"], ["access", "Accesses"]].map(([k, label]) => (
+            {[["work", "Workflow"], ["meetings", "Meetings"], ["finance", "Finance"], ["access", "Accesses"]].map(([k, label]) => (
               <button key={k} onClick={() => setProjTab(k)} style={{
                 padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit",
                 fontSize: 13, fontWeight: projTab === k ? 700 : 500,
@@ -944,7 +972,12 @@ export default function App({ mode = "admin" }) {
             ))}
           </div>
 
-          {projTab === "finance" ? (
+          {projTab === "meetings" ? (
+            <MeetingsSection key={project.id} T={T} dark={dark} dangerColor={dangerColor}
+              meetings={project.meetings || []}
+              addMeeting={addMeeting} saveMeeting={saveMeeting} deleteMeeting={deleteMeeting}
+              inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} ghostBtn={ghostBtn} />
+          ) : projTab === "finance" ? (
             <FinanceSection key={project.id} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
               finance={project.finance || []}
               addPayment={addPayment} deletePayment={deletePayment} savePayment={savePayment} markPaid={markPaid}
@@ -1745,6 +1778,130 @@ function AccessForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
   );
 }
 
+// ---------- Meetings section (per project) ----------
+// Stages are permanent playbooks; one-off meetings live here instead of cluttering
+// the Workflow. Each meeting: date, agenda/topics, links shared, and PRIVATE notes
+// (admin-only, stored in a separate table the client's token cannot read).
+function MeetingsSection({ T, dark, dangerColor, meetings, addMeeting, saveMeeting, deleteMeeting, inputStyle, primaryBtn, iconBtn, pillBase, ghostBtn }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  // newest meeting first; undated sink to the bottom
+  const ordered = [...meetings].sort((a, b) => String(b.meetingDate || "0000").localeCompare(String(a.meetingDate || "0000")));
+  const ok = dark ? "#9CC4A8" : "#3E7050";
+
+  return (
+    <div style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+        <p style={{ fontSize: 12, color: T.inkSoft, margin: 0, maxWidth: 560 }}>
+          A log of meetings for this project — agenda, links shared, and private notes. Agenda and links are visible to the client when the meeting is marked visible; notes are always internal.
+        </p>
+        <button onClick={() => setShowAdd(v => !v)} style={primaryBtn}>{showAdd ? "Close" : "+ Add meeting"}</button>
+      </div>
+
+      {showAdd && <MeetingForm onSubmit={(m) => { addMeeting(m); setShowAdd(false); }} onCancel={() => setShowAdd(false)} T={T} dark={dark} inputStyle={inputStyle} primaryBtn={primaryBtn} pillBase={pillBase} />}
+
+      <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
+        {ordered.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No meetings logged yet.</div>}
+        {ordered.map(m => (
+          <div key={m.id} style={{ padding: "14px 0", borderBottom: `1px solid ${T.line}` }}>
+            {editId === m.id ? (
+              <MeetingForm initial={m} onSubmit={(patch) => { saveMeeting(m.id, patch); setEditId(null); }} onCancel={() => setEditId(null)} T={T} dark={dark} inputStyle={inputStyle} primaryBtn={primaryBtn} pillBase={pillBase} />
+            ) : (
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 240 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                    <span style={{ fontSize: 14, fontWeight: 700 }}>{m.title || "Untitled meeting"}</span>
+                    {m.meetingDate && <span style={{ fontSize: 11.5, color: T.inkSoft, display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="calendar" size={11} style={{ verticalAlign: 0 }} />{fmtDate(m.meetingDate)}</span>}
+                    <span style={{ ...pillBase, cursor: "default", border: `1px solid ${m.clientVisible ? T.accent : T.line}`, color: m.clientVisible ? T.accent : T.inkSoft, background: m.clientVisible ? T.accentSoft : "transparent", fontSize: 10 }}>
+                      {m.clientVisible ? "Client sees this" : "Internal only"}
+                    </span>
+                  </div>
+                  {m.agenda && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: T.inkSoft, marginBottom: 2 }}>Agenda / topics</div>
+                      <div style={{ fontSize: 12.5, color: T.ink, whiteSpace: "pre-line", lineHeight: 1.5 }}>{m.agenda}</div>
+                    </div>
+                  )}
+                  {m.links && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: T.inkSoft, marginBottom: 2 }}>Links shared</div>
+                      <div style={{ fontSize: 12, color: T.ink, whiteSpace: "pre-line", lineHeight: 1.5, wordBreak: "break-word", overflowWrap: "anywhere" }}>{m.links}</div>
+                    </div>
+                  )}
+                  {m.notes && (
+                    <div style={{ marginTop: 8, background: dark ? "#1C2027" : "#F4F2EC", borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: T.inkSoft, marginBottom: 2, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <Icon name="eyeOff" size={10} style={{ verticalAlign: 0 }} />Private notes (internal)
+                      </div>
+                      <div style={{ fontSize: 12.5, color: T.ink, whiteSpace: "pre-line", lineHeight: 1.5 }}>{m.notes}</div>
+                    </div>
+                  )}
+                </div>
+                {confirmDel === m.id ? (
+                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                    <button onClick={() => { deleteMeeting(m.id); setConfirmDel(null); }} style={{ ...pillBase, border: "none", background: dangerColor, color: dark ? "#0D0F13" : "#fff" }}>Delete</button>
+                    <button onClick={() => setConfirmDel(null)} style={{ ...iconBtn, fontSize: 11.5 }}>Cancel</button>
+                  </span>
+                ) : (
+                  <span style={{ display: "inline-flex", gap: 2 }}>
+                    <button onClick={() => setEditId(m.id)} style={iconBtn} title="Edit meeting"><Icon name="edit" size={12} /></button>
+                    <button onClick={() => setConfirmDel(m.id)} style={{ ...iconBtn, color: dangerColor }} title="Delete meeting"><Icon name="x" size={13} /></button>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function MeetingForm({ initial, onSubmit, onCancel, T, dark, inputStyle, primaryBtn, pillBase }) {
+  const [title, setTitle] = useState(initial?.title || "");
+  const [meetingDate, setMeetingDate] = useState(initial?.meetingDate || "");
+  const [agenda, setAgenda] = useState(initial?.agenda || "");
+  const [links, setLinks] = useState(initial?.links || "");
+  const [notes, setNotes] = useState(initial?.notes || "");
+  const [clientVisible, setClientVisible] = useState(initial?.clientVisible ?? true);
+  const submit = () => {
+    if (!title.trim() && !meetingDate) return; // need at least a title or a date
+    onSubmit({ title: title.trim(), meetingDate: meetingDate || null, agenda: agenda.trim(), links: links.trim(), notes, clientVisible });
+  };
+  const area = { ...inputStyle, width: "100%", boxSizing: "border-box", resize: "vertical", minHeight: 60, fontFamily: "inherit" };
+  const label = { fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: T.inkSoft, marginBottom: 4, display: "block" };
+  return (
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 16, marginBottom: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Meeting title (e.g. Weekly sync)" style={{ ...inputStyle, flex: "2 1 220px" }} />
+        <input type="date" value={meetingDate} onChange={e => setMeetingDate(e.target.value)} title="Meeting date" style={{ ...inputStyle, flex: "1 1 150px" }} />
+      </div>
+      <div>
+        <span style={label}>Agenda / topics <span style={{ textTransform: "none", fontWeight: 400 }}>· client sees this</span></span>
+        <textarea value={agenda} onChange={e => setAgenda(e.target.value)} placeholder="What the meeting is about / was about" style={area} />
+      </div>
+      <div>
+        <span style={label}>Links shared <span style={{ textTransform: "none", fontWeight: 400 }}>· client sees this</span></span>
+        <textarea value={links} onChange={e => setLinks(e.target.value)} placeholder="Paste links discussed in the meeting (one per line)" style={area} />
+      </div>
+      <div>
+        <span style={label}><Icon name="eyeOff" size={10} style={{ verticalAlign: 0 }} /> Private notes <span style={{ textTransform: "none", fontWeight: 400 }}>· internal only, never shown to the client</span></span>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Internal notes — candid observations, follow-ups, anything not for the client" style={area} />
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <button onClick={() => setClientVisible(v => !v)} style={{ ...pillBase, border: `1px solid ${clientVisible ? T.accent : T.line}`, color: clientVisible ? T.accent : T.inkSoft, background: clientVisible ? T.accentSoft : "transparent" }}>
+          {clientVisible ? "Client sees this meeting" : "Internal only"}
+        </button>
+        <div style={{ flex: 1 }} />
+        <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add meeting"}</button>
+        {onCancel && <button onClick={onCancel} style={{ border: "none", background: "transparent", color: T.inkSoft, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>Cancel</button>}
+      </div>
+    </div>
+  );
+}
+
 // ---------- Clients management page ----------
 function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients, projects, inputStyle, primaryBtn, iconBtn, pillBase }) {
   const isMobile = useIsMobile();
@@ -2031,7 +2188,7 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: `1px solid ${T.line}` }}>
-          {[["progress", "Progress"], ["payments", "Payments"]].map(([k, label]) => (
+          {[["progress", "Progress"], ["meetings", "Meetings"], ["payments", "Payments"]].map(([k, label]) => (
             <button key={k} onClick={() => setTab(k)} style={{
               padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit",
               fontSize: 13, fontWeight: tab === k ? 700 : 500,
@@ -2099,6 +2256,39 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
                 ))}
               </section>
             )}
+          </>
+        ) : tab === "meetings" ? (
+          <>
+            {(() => {
+              const visibleMeetings = (project.meetings || [])
+                .filter(m => m.clientVisible)
+                .sort((a, b) => String(b.meetingDate || "0000").localeCompare(String(a.meetingDate || "0000")));
+              if (!visibleMeetings.length) {
+                return <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "16px 20px" }}>
+                  <div style={{ fontSize: 12.5, color: T.inkSoft }}>No meetings shared yet.</div>
+                </section>;
+              }
+              return visibleMeetings.map(m => (
+                <section key={m.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "16px 20px", marginBottom: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                    <h2 style={{ fontSize: 15, margin: 0, fontWeight: 700 }}>{m.title || "Meeting"}</h2>
+                    {m.meetingDate && <span style={{ fontSize: 11.5, color: T.inkSoft, display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="calendar" size={11} style={{ verticalAlign: 0 }} />{fmtDate(m.meetingDate)}</span>}
+                  </div>
+                  {m.agenda && (
+                    <div style={{ marginBottom: m.links ? 10 : 0 }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: T.inkSoft, marginBottom: 3 }}>Agenda / topics</div>
+                      <div style={{ fontSize: 13, color: T.ink, whiteSpace: "pre-line", lineHeight: 1.55 }}>{m.agenda}</div>
+                    </div>
+                  )}
+                  {m.links && (
+                    <div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: T.inkSoft, marginBottom: 3 }}>Links shared</div>
+                      <div style={{ fontSize: 12.5, color: T.ink, whiteSpace: "pre-line", lineHeight: 1.55, wordBreak: "break-word", overflowWrap: "anywhere" }}>{m.links}</div>
+                    </div>
+                  )}
+                </section>
+              ));
+            })()}
           </>
         ) : (
           <>

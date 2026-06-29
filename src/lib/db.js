@@ -28,6 +28,7 @@ export async function loadProjects() {
       finance:finance ( id, title, category, payee, amount, due_date, recurrence, status,
                         last_paid, method, delivered_at, note, client_reported_at, client_method, position ),
       accesses:accesses ( id, label, category, username, password, url, note, position ),
+      meetings:meetings ( id, title, meeting_date, agenda, links, client_visible, position, created_at ),
       activity:activity ( id, when_label, text, created_at )
     `)
     .order("position", { ascending: true })
@@ -53,6 +54,7 @@ function dbProjectToUI(p) {
     })),
     finance: (p.finance || []).sort(byPos).map(dbFinanceToUI),
     accesses: (p.accesses || []).sort(byPos).map(dbAccessToUI),
+    meetings: (p.meetings || []).sort(byPos).map(dbMeetingToUI),
     activity: (p.activity || [])
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
       .map((a) => ({ id: a.id, when: a.when_label, text: a.text })),
@@ -78,6 +80,12 @@ const dbFinanceToUI = (f) => ({
 const dbAccessToUI = (a) => ({
   id: a.id, label: a.label, category: a.category, username: a.username || "",
   password: a.password || "", url: a.url || "", note: a.note || "",
+});
+
+const dbMeetingToUI = (m) => ({
+  id: m.id, title: m.title || "", meetingDate: m.meeting_date || null,
+  agenda: m.agenda || "", links: m.links || "", clientVisible: m.client_visible,
+  notes: "", // private notes live in meeting_notes; loaded separately for admin only
 });
 
 // ---- Generic helpers ----------------------------------------------------
@@ -212,6 +220,58 @@ export const db = {
     if (error) throw error;
   },
 
+  // Meetings (facts in `meetings`, private notes in admin-only `meeting_notes`)
+  async createMeeting(projectId, m) {
+    const { data, error } = await supabase.from("meetings")
+      .insert({
+        project_id: projectId, title: m.title || "", meeting_date: m.meetingDate || null,
+        agenda: m.agenda || "", links: m.links || "", client_visible: m.clientVisible ?? true,
+        position: m.position ?? 0,
+      })
+      .select("id").single();
+    if (error) throw error;
+    // save private notes row if any notes were entered
+    if (m.notes) {
+      await supabase.from("meeting_notes").upsert({ meeting_id: data.id, notes: m.notes });
+    }
+    return data.id;
+  },
+  async updateMeeting(id, patch) {
+    const cols = {};
+    if ("title" in patch) cols.title = patch.title;
+    if ("meetingDate" in patch) cols.meeting_date = patch.meetingDate || null;
+    if ("agenda" in patch) cols.agenda = patch.agenda;
+    if ("links" in patch) cols.links = patch.links;
+    if ("clientVisible" in patch) cols.client_visible = patch.clientVisible;
+    if ("position" in patch) cols.position = patch.position;
+    if (Object.keys(cols).length) {
+      const { error } = await supabase.from("meetings").update(cols).eq("id", id);
+      if (error) throw error;
+    }
+    if ("notes" in patch) {
+      const { error: nErr } = await supabase.from("meeting_notes")
+        .upsert({ meeting_id: id, notes: patch.notes || "" });
+      if (nErr) throw nErr;
+    }
+  },
+  async deleteMeeting(id) {
+    const { error } = await supabase.from("meetings").delete().eq("id", id);
+    if (error) throw error; // meeting_notes row cascades on delete
+  },
+  async reorderMeetings(orderedIds) {
+    await Promise.all(orderedIds.map((id, i) =>
+      supabase.from("meetings").update({ position: i }).eq("id", id)));
+  },
+  // Admin-only: fetch private notes for a project's meetings. Returns { meetingId: notes }.
+  // For a client this returns {} because RLS blocks the table (handled gracefully).
+  async loadMeetingNotes(meetingIds) {
+    if (!meetingIds || !meetingIds.length) return {};
+    const { data, error } = await supabase.from("meeting_notes")
+      .select("meeting_id, notes").in("meeting_id", meetingIds);
+    if (error) return {}; // client (no access) or transient error → no notes shown
+    return Object.fromEntries((data || []).map((r) => [r.meeting_id, r.notes || ""]));
+  },
+
   // Activity
   async addActivity(projectId, whenLabel, text) {
     const { error } = await supabase.from("activity")
@@ -310,4 +370,11 @@ export async function persistProject(p) {
     note: a.note || "", position: i,
   }));
   if (accRows.length) await supabase.from("accesses").upsert(accRows);
+
+  // meetings (facts only — private notes are written via db.createMeeting/updateMeeting)
+  const meetRows = (p.meetings || []).map((m, i) => ({
+    id: m.id, project_id: p.id, title: m.title || "", meeting_date: m.meetingDate || null,
+    agenda: m.agenda || "", links: m.links || "", client_visible: m.clientVisible ?? true, position: i,
+  }));
+  if (meetRows.length) await supabase.from("meetings").upsert(meetRows);
 }
