@@ -28,7 +28,7 @@ export async function loadProjects() {
       finance:finance ( id, title, category, payee, amount, due_date, recurrence, status,
                         last_paid, method, delivered_at, note, client_reported_at, client_method, position ),
       accesses:accesses ( id, label, category, username, password, url, note, position ),
-      meetings:meetings ( id, title, meeting_date, agenda, links, client_visible, position, created_at ),
+      meetings:meetings ( id, title, meeting_date, meeting_time, agenda, links, client_visible, position, created_at ),
       activity:activity ( id, when_label, text, created_at )
     `)
     .order("position", { ascending: true })
@@ -83,7 +83,7 @@ const dbAccessToUI = (a) => ({
 });
 
 const dbMeetingToUI = (m) => ({
-  id: m.id, title: m.title || "", meetingDate: m.meeting_date || null,
+  id: m.id, title: m.title || "", meetingDate: m.meeting_date || null, meetingTime: m.meeting_time || null,
   agenda: m.agenda || "", links: m.links || "", clientVisible: m.client_visible,
   notes: "", // private notes live in meeting_notes; loaded separately for admin only
 });
@@ -224,7 +224,7 @@ export const db = {
   async createMeeting(projectId, m) {
     const { data, error } = await supabase.from("meetings")
       .insert({
-        project_id: projectId, title: m.title || "", meeting_date: m.meetingDate || null,
+        project_id: projectId, title: m.title || "", meeting_date: m.meetingDate || null, meeting_time: m.meetingTime || null,
         agenda: m.agenda || "", links: m.links || "", client_visible: m.clientVisible ?? true,
         position: m.position ?? 0,
       })
@@ -240,6 +240,7 @@ export const db = {
     const cols = {};
     if ("title" in patch) cols.title = patch.title;
     if ("meetingDate" in patch) cols.meeting_date = patch.meetingDate || null;
+    if ("meetingTime" in patch) cols.meeting_time = patch.meetingTime || null;
     if ("agenda" in patch) cols.agenda = patch.agenda;
     if ("links" in patch) cols.links = patch.links;
     if ("clientVisible" in patch) cols.client_visible = patch.clientVisible;
@@ -373,7 +374,7 @@ export async function persistProject(p) {
 
   // meetings (facts only — private notes are written via db.createMeeting/updateMeeting)
   const meetRows = (p.meetings || []).map((m, i) => ({
-    id: m.id, project_id: p.id, title: m.title || "", meeting_date: m.meetingDate || null,
+    id: m.id, project_id: p.id, title: m.title || "", meeting_date: m.meetingDate || null, meeting_time: m.meetingTime || null,
     agenda: m.agenda || "", links: m.links || "", client_visible: m.clientVisible ?? true, position: i,
   }));
   if (meetRows.length) await supabase.from("meetings").upsert(meetRows);

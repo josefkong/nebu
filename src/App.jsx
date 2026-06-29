@@ -215,6 +215,14 @@ function useIsMobile() {
 
 // ---------- Date display helpers ----------
 const fmtDate = (iso) => iso ? new Date(iso.length === 10 ? iso + "T00:00:00" : iso).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+// meeting time arrives as "HH:MM" or "HH:MM:SS"; render as a friendly 12-hour label
+const fmtTime = (t) => {
+  if (!t) return "";
+  const [h, m] = t.split(":");
+  const hr = parseInt(h, 10); if (isNaN(hr)) return "";
+  const ampm = hr >= 12 ? "PM" : "AM"; const h12 = hr % 12 || 12;
+  return `${h12}:${m} ${ampm}`;
+};
 const daysBetween = (a, b) => Math.max(0, Math.round((new Date(b) - new Date(a)) / 86400000));
 const durationLabel = (n) => n === 0 ? "same day" : n === 1 ? "1 day" : `${n} days`;
 
@@ -726,6 +734,13 @@ export default function App({ mode = "admin" }) {
       .map(t => ({ ...t, projectId: p.id, projectName: p.name, client: p.client, stageName: s.name }))
     )), [projects]);
 
+  // All dated meetings across every project, flattened for the calendar
+  const allMeetings = useMemo(() =>
+    projects.flatMap(p => (p.meetings || [])
+      .filter(m => m.meetingDate)
+      .map(m => ({ ...m, projectId: p.id, projectName: p.name, client: p.client }))
+    ), [projects]);
+
   // Client login: skip the admin shell entirely, show the read-only portal.
   // With multiple granted projects, a slim switcher lets them pick.
   if (mode === "client") {
@@ -754,11 +769,12 @@ export default function App({ mode = "admin" }) {
       {/* Native date-picker calendar icon is dark; invert it in dark mode so it stays visible */}
       <style>{`
         ${FONT_IMPORT}
-        input[type="date"]::-webkit-calendar-picker-indicator {
-          filter: ${dark ? "invert(0.85)" : "none"};
-          opacity: 0.85; cursor: pointer;
+        input[type="date"]::-webkit-calendar-picker-indicator,
+        input[type="time"]::-webkit-calendar-picker-indicator {
+          filter: ${dark ? "invert(1) brightness(1.6)" : "none"};
+          opacity: ${dark ? "0.9" : "0.85"}; cursor: pointer;
         }
-        input[type="date"] { color-scheme: ${dark ? "dark" : "light"}; }
+        input[type="date"], input[type="time"] { color-scheme: ${dark ? "dark" : "light"}; }
       `}</style>
       {/* Sidebar */}
       {isMobile && sidebarOpen && (
@@ -893,7 +909,7 @@ export default function App({ mode = "admin" }) {
       {page === "calendar" ? (
         <CalendarOverview
           T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
-          allPending={allPending} urgencyMap={URGENCY}
+          allPending={allPending} allMeetings={allMeetings} urgencyMap={URGENCY}
           openProject={(pid) => { setActiveId(pid); setPage("projects"); }}
         />
       ) : page === "settings" ? (
@@ -968,7 +984,9 @@ export default function App({ mode = "admin" }) {
                 color: projTab === k ? T.accent : T.inkSoft,
                 borderBottom: projTab === k ? `2px solid ${T.accent}` : "2px solid transparent",
                 marginBottom: -1,
-              }}>{label}</button>
+              }}>{k === "meetings"
+                ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="calendar" size={12} style={{ verticalAlign: 0 }} />{label}</span>
+                : label}</button>
             ))}
           </div>
 
@@ -1228,7 +1246,7 @@ export default function App({ mode = "admin" }) {
 }
 
 // ---------- Calendar overview ----------
-function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, urgencyMap, openProject }) {
+function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, allMeetings = [], urgencyMap, openProject }) {
   const isMobile = useIsMobile();
   const cellH = isMobile ? 56 : 86;
   const dotSize = isMobile ? 12 : 17;
@@ -1245,6 +1263,8 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, urgencyM
   const dateKey = (d) => `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 
   const tasksOn = (key) => allPending.filter(t => occursOn(t, key));
+  const meetingsOn = (key) => allMeetings.filter(m => m.meetingDate === key)
+    .sort((a, b) => String(a.meetingTime || "99:99").localeCompare(String(b.meetingTime || "99:99")));
 
   const prevMonth = () => { if (month === 0) { setMonth(11); setYear(y => y - 1); } else setMonth(m => m - 1); };
   const nextMonth = () => { if (month === 11) { setMonth(0); setYear(y => y + 1); } else setMonth(m => m + 1); };
@@ -1291,6 +1311,35 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, urgencyM
 
   const panelStyle = { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "16px 18px", flex: "1 1 280px" };
 
+  // Meetings render distinctly from tasks: a square accent chip with a calendar glyph,
+  // so at a glance you can tell "meeting" from "task" on a day cell.
+  const MeetingDot = ({ m, size = 22 }) => (
+    <span title={`${m.title || "Meeting"}${m.meetingTime ? " · " + fmtTime(m.meetingTime) : ""} — ${m.projectName}`} style={{
+      width: size, height: size, borderRadius: 5, flexShrink: 0,
+      background: dark ? "#2A211B" : "#F6EAE2", color: T.accent, border: `1px solid ${T.accent}`,
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+    }}><Icon name="calendar" size={size * 0.55} style={{ verticalAlign: 0 }} /></span>
+  );
+
+  const MeetingRow = ({ m }) => (
+    <button onClick={() => openProject(m.projectId)} title="Open project" style={{
+      display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "8px 10px", marginBottom: 6,
+      background: dark ? "#2A211B" : "#F6EAE2", border: `1px solid ${T.accent}`,
+      borderRadius: 8, cursor: "pointer", fontFamily: "inherit", color: T.ink,
+    }}>
+      <MeetingDot m={m} />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600 }}>
+          {m.title || "Meeting"}
+          {m.meetingTime && <span style={{ color: T.accent, marginLeft: 6, fontWeight: 700 }}>{fmtTime(m.meetingTime)}</span>}
+        </div>
+        <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 2 }}>
+          {m.client} · meeting{!m.clientVisible ? " · internal" : ""}
+        </div>
+      </div>
+    </button>
+  );
+
   return (
     <main style={{ flex: 1, padding: isMobile ? "18px 12px" : "30px 36px", maxWidth: 1200, minWidth: 0 }}>
       {/* Calendar grid */}
@@ -1311,21 +1360,24 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, urgencyM
             if (d === null) return <div key={`e${i}`} style={{ height: cellH }} />;
             const key = dateKey(d);
             const dayTasks = tasksOn(key);
+            const dayMeetings = meetingsOn(key);
+            const dayCount = dayTasks.length + dayMeetings.length;
             const isToday = key === todayStr;
             const isPast = key < todayStr;
             return (
-              <button key={key} onClick={() => dayTasks.length && setSelectedDay(key)} style={{
+              <button key={key} onClick={() => dayCount && setSelectedDay(key)} style={{
                 height: cellH, padding: isMobile ? 3 : 6, borderRadius: 8, overflow: "hidden", boxSizing: "border-box",
                 border: `1px solid ${isToday ? T.accent : T.line}`,
                 background: isToday ? T.accentSoft : "transparent",
-                opacity: isPast && !dayTasks.length ? 0.45 : 1,
-                cursor: dayTasks.length ? "pointer" : "default",
+                opacity: isPast && !dayCount ? 0.45 : 1,
+                cursor: dayCount ? "pointer" : "default",
                 fontFamily: "inherit", textAlign: "left", display: "flex", flexDirection: "column",
               }}>
                 <div style={{ fontSize: isMobile ? 10 : 11.5, fontWeight: isToday ? 800 : 600, color: isToday ? T.accent : T.inkSoft, marginBottom: isMobile ? 2 : 5 }}>{d}</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: isMobile ? 2 : 3, alignContent: "flex-start" }}>
-                  {dayTasks.slice(0, maxDots).map(t => <ProjectDot key={t.id} t={t} size={dotSize} />)}
-                  {dayTasks.length > maxDots && <span style={{ fontSize: 9, color: T.inkSoft, alignSelf: "center" }}>+{dayTasks.length - maxDots}</span>}
+                  {dayMeetings.slice(0, maxDots).map(m => <MeetingDot key={m.id} m={m} size={dotSize} />)}
+                  {dayTasks.slice(0, Math.max(0, maxDots - dayMeetings.length)).map(t => <ProjectDot key={t.id} t={t} size={dotSize} />)}
+                  {dayCount > maxDots && <span style={{ fontSize: 9, color: T.inkSoft, alignSelf: "center" }}>+{dayCount - maxDots}</span>}
                 </div>
               </button>
             );
@@ -1337,8 +1389,9 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, urgencyM
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
         <section style={panelStyle}>
           <h2 style={{ fontSize: 14, margin: "0 0 10px", fontWeight: 700 }}>Today <span style={{ color: T.inkSoft, fontWeight: 400, fontSize: 12 }}>· {fmtDate(todayStr)}</span></h2>
+          {meetingsOn(todayStr).map(m => <MeetingRow key={m.id} m={m} />)}
           {dueToday.length ? dueToday.map(t => <TaskRow key={t.id} t={t} />) :
-            <div style={{ fontSize: 12, color: T.inkSoft }}>Nothing due today.</div>}
+            (meetingsOn(todayStr).length ? null : <div style={{ fontSize: 12, color: T.inkSoft }}>Nothing due today.</div>)}
         </section>
 
         {overdue.length > 0 && (
@@ -1373,7 +1426,11 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, urgencyM
               </h2>
               <button onClick={() => setSelectedDay(null)} style={{ border: "none", background: "transparent", color: T.inkSoft, cursor: "pointer", padding: 4 }} title="Close"><Icon name="x" size={16} /></button>
             </div>
-            <p style={{ fontSize: 11.5, color: T.inkSoft, margin: "0 0 12px" }}>{tasksOn(selectedDay).length} pending task(s) scheduled</p>
+            <p style={{ fontSize: 11.5, color: T.inkSoft, margin: "0 0 12px" }}>
+              {(() => { const t = tasksOn(selectedDay).length, m = meetingsOn(selectedDay).length;
+                return [m ? `${m} meeting${m > 1 ? "s" : ""}` : null, t ? `${t} task${t > 1 ? "s" : ""}` : null].filter(Boolean).join(" · ") || "Nothing scheduled"; })()}
+            </p>
+            {meetingsOn(selectedDay).map(m => <MeetingRow key={m.id} m={m} />)}
             {tasksOn(selectedDay).map(t => <TaskRow key={t.id} t={t} />)}
           </div>
         </div>
@@ -1813,7 +1870,7 @@ function MeetingsSection({ T, dark, dangerColor, meetings, addMeeting, saveMeeti
                 <div style={{ flex: 1, minWidth: 240 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                     <span style={{ fontSize: 14, fontWeight: 700 }}>{m.title || "Untitled meeting"}</span>
-                    {m.meetingDate && <span style={{ fontSize: 11.5, color: T.inkSoft, display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="calendar" size={11} style={{ verticalAlign: 0 }} />{fmtDate(m.meetingDate)}</span>}
+                    {m.meetingDate && <span style={{ fontSize: 11.5, color: T.inkSoft, display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="calendar" size={11} style={{ verticalAlign: 0 }} />{fmtDate(m.meetingDate)}{m.meetingTime ? ` \u00b7 ${fmtTime(m.meetingTime)}` : ""}</span>}
                     <span style={{ ...pillBase, cursor: "default", border: `1px solid ${m.clientVisible ? T.accent : T.line}`, color: m.clientVisible ? T.accent : T.inkSoft, background: m.clientVisible ? T.accentSoft : "transparent", fontSize: 10 }}>
                       {m.clientVisible ? "Client sees this" : "Internal only"}
                     </span>
@@ -1862,21 +1919,23 @@ function MeetingsSection({ T, dark, dangerColor, meetings, addMeeting, saveMeeti
 function MeetingForm({ initial, onSubmit, onCancel, T, dark, inputStyle, primaryBtn, pillBase }) {
   const [title, setTitle] = useState(initial?.title || "");
   const [meetingDate, setMeetingDate] = useState(initial?.meetingDate || "");
+  const [meetingTime, setMeetingTime] = useState(initial?.meetingTime || "");
   const [agenda, setAgenda] = useState(initial?.agenda || "");
   const [links, setLinks] = useState(initial?.links || "");
   const [notes, setNotes] = useState(initial?.notes || "");
   const [clientVisible, setClientVisible] = useState(initial?.clientVisible ?? true);
   const submit = () => {
     if (!title.trim() && !meetingDate) return; // need at least a title or a date
-    onSubmit({ title: title.trim(), meetingDate: meetingDate || null, agenda: agenda.trim(), links: links.trim(), notes, clientVisible });
+    onSubmit({ title: title.trim(), meetingDate: meetingDate || null, meetingTime: meetingTime || null, agenda: agenda.trim(), links: links.trim(), notes, clientVisible });
   };
   const area = { ...inputStyle, width: "100%", boxSizing: "border-box", resize: "vertical", minHeight: 60, fontFamily: "inherit" };
   const label = { fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: T.inkSoft, marginBottom: 4, display: "block" };
   return (
     <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 16, marginBottom: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Meeting title (e.g. Weekly sync)" style={{ ...inputStyle, flex: "2 1 220px" }} />
-        <input type="date" value={meetingDate} onChange={e => setMeetingDate(e.target.value)} title="Meeting date" style={{ ...inputStyle, flex: "1 1 150px" }} />
+        <input autoFocus value={title} onChange={e => setTitle(e.target.value)} placeholder="Meeting title (e.g. Weekly sync)" style={{ ...inputStyle, flex: "2 1 200px" }} />
+        <input type="date" value={meetingDate} onChange={e => setMeetingDate(e.target.value)} title="Meeting date" style={{ ...inputStyle, flex: "1 1 140px" }} />
+        <input type="time" value={meetingTime} onChange={e => setMeetingTime(e.target.value)} title="Meeting time" style={{ ...inputStyle, flex: "1 1 110px" }} />
       </div>
       <div>
         <span style={label}>Agenda / topics <span style={{ textTransform: "none", fontWeight: 400 }}>· client sees this</span></span>
@@ -2118,7 +2177,15 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, fontFamily: FONT_STACK }}>
-      <style>{FONT_IMPORT}</style>
+      <style>{`
+        ${FONT_IMPORT}
+        input[type="date"]::-webkit-calendar-picker-indicator,
+        input[type="time"]::-webkit-calendar-picker-indicator {
+          filter: ${dark ? "invert(1) brightness(1.6)" : "none"};
+          opacity: ${dark ? "0.9" : "0.85"}; cursor: pointer;
+        }
+        input[type="date"], input[type="time"] { color-scheme: ${dark ? "dark" : "light"}; }
+      `}</style>
       {/* Preview banner — admin-only affordance */}
       <div style={{ background: T.accent, color: dark ? "#0D0F13" : "#fff", padding: "8px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, fontWeight: 600, gap: 8, flexWrap: "wrap" }}>
         <span>
@@ -2272,7 +2339,7 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
                 <section key={m.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "16px 20px", marginBottom: 14 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
                     <h2 style={{ fontSize: 15, margin: 0, fontWeight: 700 }}>{m.title || "Meeting"}</h2>
-                    {m.meetingDate && <span style={{ fontSize: 11.5, color: T.inkSoft, display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="calendar" size={11} style={{ verticalAlign: 0 }} />{fmtDate(m.meetingDate)}</span>}
+                    {m.meetingDate && <span style={{ fontSize: 11.5, color: T.inkSoft, display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="calendar" size={11} style={{ verticalAlign: 0 }} />{fmtDate(m.meetingDate)}{m.meetingTime ? ` \u00b7 ${fmtTime(m.meetingTime)}` : ""}</span>}
                   </div>
                   {m.agenda && (
                     <div style={{ marginBottom: m.links ? 10 : 0 }}>
