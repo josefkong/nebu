@@ -29,6 +29,7 @@ export async function loadProjects() {
                         last_paid, method, delivered_at, note, client_reported_at, client_method, position ),
       accesses:accesses ( id, label, category, username, password, url, note, position ),
       meetings:meetings ( id, title, meeting_date, meeting_time, agenda, links, client_visible, position, created_at ),
+      looseTasks:project_tasks ( id, title, status, urgency, client_visible, note, created_at, completed_at, due_date, recurrence, last_done, position ),
       activity:activity ( id, when_label, text, created_at )
     `)
     .order("position", { ascending: true })
@@ -55,6 +56,7 @@ function dbProjectToUI(p) {
     finance: (p.finance || []).sort(byPos).map(dbFinanceToUI),
     accesses: (p.accesses || []).sort(byPos).map(dbAccessToUI),
     meetings: (p.meetings || []).sort(byPos).map(dbMeetingToUI),
+    looseTasks: (p.looseTasks || []).sort(byPos).map(dbTaskToUI),
     activity: (p.activity || [])
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
       .map((a) => ({ id: a.id, when: a.when_label, text: a.text })),
@@ -263,6 +265,12 @@ export const db = {
     await Promise.all(orderedIds.map((id, i) =>
       supabase.from("meetings").update({ position: i }).eq("id", id)));
   },
+
+  // Loose tasks (project_tasks) — one-off tasks not tied to a stage
+  async deleteLooseTask(id) {
+    const { error } = await supabase.from("project_tasks").delete().eq("id", id);
+    if (error) throw error;
+  },
   // Admin-only: fetch private notes for a project's meetings. Returns { meetingId: notes }.
   // For a client this returns {} because RLS blocks the table (handled gracefully).
   async loadMeetingNotes(meetingIds) {
@@ -378,4 +386,12 @@ export async function persistProject(p) {
     agenda: m.agenda || "", links: m.links || "", client_visible: m.clientVisible ?? true, position: i,
   }));
   if (meetRows.length) await supabase.from("meetings").upsert(meetRows);
+
+  // loose tasks (project_tasks) — one-off tasks attached to the project, not a stage
+  const looseRows = (p.looseTasks || []).map((t, i) => ({
+    id: t.id, project_id: p.id, title: t.title, status: t.status, urgency: t.urgency,
+    client_visible: t.clientVisible, note: t.note || "", completed_at: t.completedAt || null,
+    due_date: t.dueDate || null, recurrence: t.recurrence || "none", last_done: t.lastDone || null, position: i,
+  }));
+  if (looseRows.length) await supabase.from("project_tasks").upsert(looseRows);
 }

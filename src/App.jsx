@@ -616,6 +616,54 @@ export default function App({ mode = "admin" }) {
     update(p => { p.meetings = (p.meetings || []).filter(m => m.id !== mid); return p; });
     db.deleteMeeting(mid).catch(e => console.error(e));
   };
+
+  // ----- loose tasks (project_tasks): one-off tasks not tied to a stage -----
+  const findLoose = (p, tid) => (p.looseTasks || []).find(t => t.id === tid);
+  const addLooseTask = (title) => {
+    const t = (title || "").trim(); if (!t) return;
+    update(p => { (p.looseTasks = p.looseTasks || []).push(mkTask(t)); return p; });
+  };
+  const cycleLooseStatus = (tid) => update(p => {
+    const t = findLoose(p, tid); if (!t) return p;
+    t.status = cycle(STATUS_ORDER)(t.status);
+    if (t.status === "done") {
+      if (t.recurrence && t.recurrence !== "none" && t.dueDate) {
+        t.lastDone = new Date().toISOString().slice(0, 10);
+        if (t.recurrence === "daily") {
+          const d = new Date(t.dueDate + "T00:00:00"); d.setDate(d.getDate() + 1);
+          t.dueDate = d.toISOString().slice(0, 10);
+        } else { t.dueDate = rollForward(t.dueDate, t.recurrence); }
+        t.status = "doing";
+      } else if (!t.completedAt) {
+        t.completedAt = new Date().toISOString();
+      }
+    }
+    if (t.status !== "done") t.completedAt = null;
+    return p;
+  });
+  const cycleLooseUrgency = (tid) => update(p => { const t = findLoose(p, tid); if (t) t.urgency = cycle(URGENCY_ORDER)(t.urgency); return p; });
+  const cycleLooseRecurrence = (tid) => update(p => {
+    const t = findLoose(p, tid); if (!t) return p;
+    t.recurrence = cycle(Object.keys(RECURRENCE))(t.recurrence || "none");
+    if (t.recurrence !== "none" && !t.dueDate) t.dueDate = new Date().toISOString().slice(0, 10);
+    return p;
+  });
+  const toggleLooseVis = (tid) => update(p => { const t = findLoose(p, tid); if (t) t.clientVisible = !t.clientVisible; return p; });
+  const saveLooseTask = (tid, title, note, due, recurrence) => update(p => {
+    const t = findLoose(p, tid); if (!t) return p;
+    t.title = title.trim() || t.title; t.note = note.trim(); t.dueDate = due || null; t.recurrence = recurrence || "none";
+    return p;
+  });
+  const deleteLooseTask = (tid) => {
+    update(p => { p.looseTasks = (p.looseTasks || []).filter(t => t.id !== tid); return p; });
+    db.deleteLooseTask(tid).catch(e => console.error(e));
+  };
+  const reorderLooseTasks = (orderedIds) => update(p => {
+    const arr = p.looseTasks || [];
+    const byId = Object.fromEntries(arr.map(t => [t.id, t]));
+    p.looseTasks = orderedIds.map(id => byId[id]).filter(Boolean);
+    return p;
+  });
   const reorderAccesses = (orderedIds) => update(p => {
     const arr = p.accesses || [];
     const byId = Object.fromEntries(arr.map(a => [a.id, a]));
@@ -727,12 +775,17 @@ export default function App({ mode = "admin" }) {
   const dangerColor = dark ? "#E2918B" : "#A8453C";
   const todayStr = new Date().toISOString().slice(0, 10);
 
-  // All pending (not done) tasks across every project, flattened for the calendar
+  // All pending (not done) tasks across every project, flattened for the calendar.
+  // Includes both stage tasks and loose (project) tasks.
   const allPending = useMemo(() =>
-    projects.flatMap(p => p.stages.flatMap(s => s.tasks
-      .filter(t => t.status !== "done")
-      .map(t => ({ ...t, projectId: p.id, projectName: p.name, client: p.client, stageName: s.name }))
-    )), [projects]);
+    projects.flatMap(p => [
+      ...p.stages.flatMap(s => s.tasks
+        .filter(t => t.status !== "done")
+        .map(t => ({ ...t, projectId: p.id, projectName: p.name, client: p.client, stageName: s.name }))),
+      ...(p.looseTasks || [])
+        .filter(t => t.status !== "done")
+        .map(t => ({ ...t, projectId: p.id, projectName: p.name, client: p.client, stageName: "Task" })),
+    ]), [projects]);
 
   // All dated meetings across every project, flattened for the calendar
   const allMeetings = useMemo(() =>
@@ -977,16 +1030,14 @@ export default function App({ mode = "admin" }) {
 
           {/* Work / Finance tab switcher */}
           <div style={{ display: "flex", gap: 4, margin: "18px 0 0", borderBottom: `1px solid ${T.line}` }}>
-            {[["work", "Workflow"], ["meetings", "Meetings"], ["finance", "Finance"], ["access", "Accesses"]].map(([k, label]) => (
+            {[["work", "Workflow"], ["meetings", "Meetings"], ["tasks", "Tasks"], ["finance", "Finance"], ["access", "Accesses"]].map(([k, label]) => (
               <button key={k} onClick={() => setProjTab(k)} style={{
                 padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit",
                 fontSize: 13, fontWeight: projTab === k ? 700 : 500,
                 color: projTab === k ? T.accent : T.inkSoft,
                 borderBottom: projTab === k ? `2px solid ${T.accent}` : "2px solid transparent",
                 marginBottom: -1,
-              }}>{k === "meetings"
-                ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="calendar" size={12} style={{ verticalAlign: 0 }} />{label}</span>
-                : label}</button>
+              }}>{label}</button>
             ))}
           </div>
 
@@ -995,6 +1046,14 @@ export default function App({ mode = "admin" }) {
               meetings={project.meetings || []}
               addMeeting={addMeeting} saveMeeting={saveMeeting} deleteMeeting={deleteMeeting}
               inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} ghostBtn={ghostBtn} />
+          ) : projTab === "tasks" ? (
+            <LooseTasksSection key={project.id} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
+              tasks={project.looseTasks || []}
+              addLooseTask={addLooseTask} cycleLooseStatus={cycleLooseStatus} cycleLooseUrgency={cycleLooseUrgency}
+              cycleLooseRecurrence={cycleLooseRecurrence} toggleLooseVis={toggleLooseVis}
+              saveLooseTask={saveLooseTask} deleteLooseTask={deleteLooseTask} reorderLooseTasks={reorderLooseTasks}
+              STATUS={STATUS} URGENCY={URGENCY}
+              inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
           ) : projTab === "finance" ? (
             <FinanceSection key={project.id} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
               finance={project.finance || []}
@@ -1839,6 +1898,110 @@ function AccessForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
 // Stages are permanent playbooks; one-off meetings live here instead of cluttering
 // the Workflow. Each meeting: date, agenda/topics, links shared, and PRIVATE notes
 // (admin-only, stored in a separate table the client's token cannot read).
+// ---------- Loose Tasks section (per project) ----------
+// One-off tasks that don't belong to a stage. Same controls as stage tasks
+// (status, urgency, recurrence, client-visible, due date, note) but flat — no stage.
+function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, addLooseTask, cycleLooseStatus, cycleLooseUrgency, cycleLooseRecurrence, toggleLooseVis, saveLooseTask, deleteLooseTask, reorderLooseTasks, STATUS, URGENCY, inputStyle, primaryBtn, iconBtn, pillBase }) {
+  const isMobile = useIsMobile();
+  const [newTitle, setNewTitle] = useState("");
+  const [editId, setEditId] = useState(null);
+  const [filter, setFilter] = useState("active"); // active | all | completed
+
+  const matches = (t) => filter === "all" ? true : filter === "completed" ? t.status === "done" : t.status !== "done";
+  const visible = tasks.filter(matches);
+  const canReorder = filter === "all" && !editId;
+
+  const add = () => { addLooseTask(newTitle); setNewTitle(""); };
+
+  return (
+    <div style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+        <p style={{ fontSize: 12, color: T.inkSoft, margin: 0, maxWidth: 540 }}>
+          One-off tasks that don't belong to a stage — like a request that came out of a meeting. Mark a task visible and the client sees it's in progress.
+        </p>
+        <div style={{ display: "inline-flex", border: `1px solid ${T.line}`, borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
+          {[["active", "Active"], ["all", "All"], ["completed", "Completed"]].map(([k, label]) => (
+            <button key={k} onClick={() => setFilter(k)} style={{
+              padding: "6px 12px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: filter === k ? 700 : 500,
+              background: filter === k ? T.accent : "transparent", color: filter === k ? (dark ? "#0D0F13" : "#fff") : T.inkSoft,
+            }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Add box */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <input value={newTitle} onChange={e => setNewTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && add()}
+          placeholder="Add a task and press Enter (e.g. Find a UGC creator)"
+          style={{ ...inputStyle, flex: 1 }} />
+        <button onClick={add} style={primaryBtn}>Add</button>
+      </div>
+
+      <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
+        {visible.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>
+          {tasks.length === 0 ? "No tasks yet." : filter === "completed" ? "No completed tasks." : "No active tasks — switch to All or Completed."}
+        </div>}
+        <SortableList items={visible} disabled={!canReorder} onReorder={(ids) => reorderLooseTasks(ids)}
+          renderItem={(t, { handleProps }) => (
+          <div key={t.id} style={{
+            display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 10, padding: "9px 0", flexWrap: "wrap",
+            flexDirection: isMobile ? "column" : "row", borderTop: `1px solid ${T.line}`,
+          }}>
+            {editId === t.id ? (
+              <TaskEditForm task={t} onSave={(title, note, due, rec) => { saveLooseTask(t.id, title, note, due, rec); setEditId(null); }} onCancel={() => setEditId(null)} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} />
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, width: isMobile ? "100%" : "auto", flex: isMobile ? "none" : 1, minWidth: 0 }}>
+                  <span {...(canReorder ? handleProps : {})} title={canReorder ? "Drag to reorder" : "Switch to All view to reorder"}
+                    style={{ ...(canReorder ? handleProps.style : {}), color: T.inkSoft, display: "flex", flexShrink: 0, opacity: canReorder ? 1 : 0.3 }}>
+                    <Icon name="grip" size={14} />
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 500, textDecoration: t.status === "done" ? "line-through" : "none", color: t.status === "done" ? T.inkSoft : T.ink }}>{t.title}</div>
+                    <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2, minHeight: 15 }}>{t.note || "\u00a0"}</div>
+                    <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3, opacity: 0.85 }}>
+                      Created {fmtDate(t.createdAt)}
+                      {t.recurrence && t.recurrence !== "none" && (
+                        <> · <span style={{ color: T.accent, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "bottom" }}><Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence]}</span>{t.dueDate ? <> · next {fmtDate(t.dueDate)}</> : null}{t.lastDone ? <> · last done {fmtDate(t.lastDone)}</> : null}</>
+                      )}
+                      {t.dueDate && t.status !== "done" && (!t.recurrence || t.recurrence === "none") && (
+                        <> · <span style={{ color: t.dueDate < todayStr ? dangerColor : T.inkSoft, fontWeight: t.dueDate < todayStr ? 700 : 400 }}>
+                          {t.dueDate < todayStr ? "Overdue — was due" : "Due"} {fmtDate(t.dueDate)}
+                        </span></>
+                      )}
+                      {(!t.recurrence || t.recurrence === "none") && t.completedAt && <> · Completed {fmtDate(t.completedAt)}</>}
+                    </div>
+                  </div>
+                </div>
+                <div style={isMobile ? { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6, width: "100%", marginTop: 6 } : { display: "contents" }}>
+                  <button onClick={() => cycleLooseRecurrence(t.id)} title="Click to cycle recurrence"
+                    style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                    <Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence || "none"]}
+                  </button>
+                  <button onClick={() => cycleLooseUrgency(t.id)} title="Click to cycle urgency"
+                    style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                    {URGENCY[t.urgency].label}
+                  </button>
+                  <button onClick={() => cycleLooseStatus(t.id)} title="Click to cycle status"
+                    style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                    {STATUS[t.status].label}
+                  </button>
+                  <button onClick={() => toggleLooseVis(t.id)} title={t.clientVisible ? "Visible to client" : "Internal only"}
+                    style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                    {t.clientVisible ? "Client sees this" : "Internal"}
+                  </button>
+                  <button onClick={() => setEditId(t.id)} style={isMobile ? { ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 10px" } : iconBtn} title="Edit task"><Icon name="edit" size={12} />{isMobile && <span>Edit</span>}</button>
+                  <button onClick={() => deleteLooseTask(t.id)} style={isMobile ? { ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 10px" } : { ...iconBtn, color: dangerColor }} title="Delete task"><Icon name="x" size={13} />{isMobile && <span>Delete</span>}</button>
+                </div>
+              </>
+            )}
+          </div>
+        )} />
+      </section>
+    </div>
+  );
+}
+
 function MeetingsSection({ T, dark, dangerColor, meetings, addMeeting, saveMeeting, deleteMeeting, inputStyle, primaryBtn, iconBtn, pillBase, ghostBtn }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -2148,12 +2311,14 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
   }
 
   const visibleStages = project.stages.map(s => ({ ...s, tasks: (s.tasks || []).filter(t => t.clientVisible) }));
-  const allVisible = visibleStages.flatMap(s => s.tasks);
+  const visibleLooseTasks = (project.looseTasks || []).filter(t => t.clientVisible);
+  const allVisible = [...visibleStages.flatMap(s => s.tasks), ...visibleLooseTasks];
   const progress = allVisible.length ? Math.round(100 * allVisible.filter(t => t.status === "done").length / allVisible.length) : 0;
   const stageProgress = (s) => s.tasks.length ? s.tasks.filter(t => t.status === "done").length / s.tasks.length : 0;
   // Completion filter (Active hides finished work; recurring tasks have no completedAt so always read active).
   const taskMatchesView = (t) => taskView === "all" ? true : taskView === "completed" ? !!t.completedAt : !t.completedAt;
   const viewStages = visibleStages.map(s => ({ ...s, viewTasks: s.tasks.filter(taskMatchesView) }));
+  const viewLooseTasks = visibleLooseTasks.filter(taskMatchesView);
 
   const finance = project.finance || [];
   const isOverdue = (f) => f.status === "pending" && f.dueDate && f.dueDate < todayStr;
@@ -2310,6 +2475,34 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
                 ))}
               </section>
             ))}
+
+            {/* Loose tasks (one-off, not in a stage) */}
+            {viewLooseTasks.length > 0 && (
+              <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "16px 20px", marginBottom: 14 }}>
+                <h2 style={{ fontSize: 15, margin: "0 0 4px", fontWeight: 700 }}>Tasks
+                  <span style={{ fontWeight: 400, color: T.inkSoft, fontSize: 12.5, marginLeft: 8 }}>{viewLooseTasks.filter(t => t.status === "done").length}/{viewLooseTasks.length} done</span>
+                </h2>
+                {viewLooseTasks.map(t => (
+                  <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: `1px solid ${T.line}`, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 500, textDecoration: t.status === "done" ? "line-through" : "none", color: t.status === "done" ? T.inkSoft : T.ink }}>{t.title}</div>
+                      {t.note && <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2 }}>{t.note}</div>}
+                      {(t.completedAt || (t.dueDate && t.status !== "done")) && (
+                        <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3 }}>
+                          {t.completedAt
+                            ? <>Completed {fmtDate(t.completedAt)}</>
+                            : (!t.recurrence || t.recurrence === "none")
+                              ? <>Expected by {fmtDate(t.dueDate)}</>
+                              : <span style={{ color: T.accent, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence]}</span>}
+                        </div>
+                      )}
+                    </div>
+                    {t.urgency === "urgent" && <span style={{ ...pill, background: dangerColor, color: dark ? "#0D0F13" : "#fff" }}>Urgent</span>}
+                    <span style={{ ...pill, color: statusBadge(t).color, background: statusBadge(t).bg }}>{statusBadge(t).label}</span>
+                  </div>
+                ))}
+              </section>
+            )}
 
             {/* Activity timeline */}
             {project.activity.length > 0 && (
