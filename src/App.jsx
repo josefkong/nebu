@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { loadProjects, persistProject, db } from "./lib/db.js";
 import { supabase } from "./lib/supabase.js";
-import SortableList from "./lib/SortableList.jsx";
+import SortableList, { SortableTabs } from "./lib/SortableList.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
 
 // ---------- Nebu brand palette ----------
@@ -453,7 +453,27 @@ export default function App({ mode = "admin" }) {
   const taskMatchesView = (t) => taskView === "all" ? true : taskView === "completed" ? !!t.completedAt : !t.completedAt;
   const [showNewProject, setShowNewProject] = useState(false);
   const [page, setPage] = useState("projects");
-  const [projTab, setProjTab] = useState("work"); // work | finance | access inside a project
+  const [projTab, setProjTab] = useState("work"); // work | meetings | tasks | finance | access inside a project
+  // Tab order is a personal UI preference; persist per-device. Wrapped in try/catch
+  // because storage can be unavailable (private mode / sandbox) — never crash over it.
+  const TAB_DEFS = { work: "Playbook", meetings: "Meetings", tasks: "Tasks", finance: "Finance", access: "Accesses" };
+  const DEFAULT_TAB_ORDER = ["work", "meetings", "tasks", "finance", "access"];
+  const [tabOrder, setTabOrder] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("nebu_tab_order") || "null");
+      if (Array.isArray(saved)) {
+        // keep only known keys, then append any new tabs that aren't in the saved order
+        const known = saved.filter(k => k in TAB_DEFS);
+        const missing = DEFAULT_TAB_ORDER.filter(k => !known.includes(k));
+        return [...known, ...missing];
+      }
+    } catch (e) { /* storage unavailable — fall back to default */ }
+    return DEFAULT_TAB_ORDER;
+  });
+  const reorderTabs = (orderedKeys) => {
+    setTabOrder(orderedKeys);
+    try { localStorage.setItem("nebu_tab_order", JSON.stringify(orderedKeys)); } catch (e) { /* ignore */ }
+  };
   const [clients, setClients] = useState([]);
   useEffect(() => { db.loadClients().then(setClients).catch(() => {}); }, []);
   const isMobile = useIsMobile();
@@ -840,7 +860,7 @@ export default function App({ mode = "admin" }) {
       }}>
         <div style={{ padding: sidebarOpen ? "0 18px 16px" : "0 12px 16px", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: sidebarOpen ? "space-between" : "center", gap: 8 }}>
-            {sidebarOpen && <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.01em" }}>Nebu<span style={{ color: T.brandDot }}>.</span></div>}
+            {sidebarOpen && <img src="/nebu-logo.png" alt="Nebu" style={{ height: 26, width: "auto", display: "block" }} />}
             <button onClick={() => setSidebarOpen(o => !o)} title={sidebarOpen ? "Minimize sidebar" : "Expand sidebar"}
               style={{ border: "none", background: "transparent", color: "inherit", opacity: .7, cursor: "pointer", padding: 4, display: "flex" }}>
               <Icon name="panel" size={16} style={{ verticalAlign: 0 }} />
@@ -1028,17 +1048,20 @@ export default function App({ mode = "admin" }) {
             </div>
           )}
 
-          {/* Work / Finance tab switcher */}
-          <div style={{ display: "flex", gap: 4, margin: "18px 0 0", borderBottom: `1px solid ${T.line}` }}>
-            {[["work", "Workflow"], ["meetings", "Meetings"], ["tasks", "Tasks"], ["finance", "Finance"], ["access", "Accesses"]].map(([k, label]) => (
-              <button key={k} onClick={() => setProjTab(k)} style={{
-                padding: "8px 16px", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit",
-                fontSize: 13, fontWeight: projTab === k ? 700 : 500,
-                color: projTab === k ? T.accent : T.inkSoft,
-                borderBottom: projTab === k ? `2px solid ${T.accent}` : "2px solid transparent",
-                marginBottom: -1,
-              }}>{label}</button>
-            ))}
+          {/* Tab switcher — drag a tab to reorder; order is remembered per device */}
+          <div style={{ display: "flex", gap: 4, margin: "18px 0 0", borderBottom: `1px solid ${T.line}`, flexWrap: "wrap" }}>
+            <SortableTabs
+              items={tabOrder.map(k => ({ key: k, label: TAB_DEFS[k] }))}
+              onReorder={reorderTabs}
+              renderItem={({ key: k, label }) => (
+                <button onClick={() => setProjTab(k)} style={{
+                  padding: "8px 16px", border: "none", background: "transparent", cursor: "grab", fontFamily: "inherit",
+                  fontSize: 13, fontWeight: projTab === k ? 700 : 500,
+                  color: projTab === k ? T.accent : T.inkSoft,
+                  borderBottom: projTab === k ? `2px solid ${T.accent}` : "2px solid transparent",
+                  marginBottom: -1, whiteSpace: "nowrap",
+                }}>{label}</button>
+              )} />
           </div>
 
           {projTab === "meetings" ? (
@@ -2388,7 +2411,7 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
       {/* Portal header */}
       <header style={{ background: T.sidebar, color: "#ECEAE4", padding: "26px 0" }}>
         <div style={{ maxWidth: 860, margin: "0 auto", padding: isMobile ? "0 16px" : "0 24px" }}>
-          <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: "-0.01em" }}>Nebu<span style={{ color: PALETTE.copper }}>.</span> <span style={{ fontSize: 11, opacity: 0.55, letterSpacing: 1.2, textTransform: "uppercase", marginLeft: 8 }}>Client Portal</span></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><img src="/nebu-logo.png" alt="Nebu" style={{ height: 22, width: "auto", display: "block" }} /><span style={{ fontSize: 11, opacity: 0.55, letterSpacing: 1.2, textTransform: "uppercase" }}>Client Portal</span></div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 18, flexWrap: "wrap", gap: 12 }}>
             <div>
               <div style={{ fontSize: 11.5, letterSpacing: 1.4, textTransform: "uppercase", opacity: 0.6 }}>{project.client}</div>
