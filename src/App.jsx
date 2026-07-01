@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { loadProjects, persistProject, db } from "./lib/db.js";
 import { supabase } from "./lib/supabase.js";
 import SortableList, { SortableTabs } from "./lib/SortableList.jsx";
+import nebuLogo from "./assets/nebu-logo.png";
 import SettingsPanel from "./SettingsPanel.jsx";
 
 // ---------- Nebu brand palette ----------
@@ -860,7 +861,7 @@ export default function App({ mode = "admin" }) {
       }}>
         <div style={{ padding: sidebarOpen ? "0 18px 16px" : "0 12px 16px", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: sidebarOpen ? "space-between" : "center", gap: 8 }}>
-            {sidebarOpen && <img src="/nebu-logo.png" alt="Nebu" style={{ height: 26, width: "auto", display: "block" }} />}
+            {sidebarOpen && <img src={nebuLogo} alt="Nebu" style={{ height: 26, width: "auto", display: "block" }} />}
             <button onClick={() => setSidebarOpen(o => !o)} title={sidebarOpen ? "Minimize sidebar" : "Expand sidebar"}
               style={{ border: "none", background: "transparent", color: "inherit", opacity: .7, cursor: "pointer", padding: 4, display: "flex" }}>
               <Icon name="panel" size={16} style={{ verticalAlign: 0 }} />
@@ -2411,7 +2412,7 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
       {/* Portal header */}
       <header style={{ background: T.sidebar, color: "#ECEAE4", padding: "26px 0" }}>
         <div style={{ maxWidth: 860, margin: "0 auto", padding: isMobile ? "0 16px" : "0 24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><img src="/nebu-logo.png" alt="Nebu" style={{ height: 22, width: "auto", display: "block" }} /><span style={{ fontSize: 11, opacity: 0.55, letterSpacing: 1.2, textTransform: "uppercase" }}>Client Portal</span></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><img src={nebuLogo} alt="Nebu" style={{ height: 22, width: "auto", display: "block" }} /><span style={{ fontSize: 11, opacity: 0.55, letterSpacing: 1.2, textTransform: "uppercase" }}>Client Portal</span></div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 18, flexWrap: "wrap", gap: 12 }}>
             <div>
               <div style={{ fontSize: 11.5, letterSpacing: 1.4, textTransform: "uppercase", opacity: 0.6 }}>{project.client}</div>
