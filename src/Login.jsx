@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { supabase } from "./lib/supabase.js";
+import nebuLogo from "./assets/nebu-logo.png";
 
 const C = { graphite: "#0D0F13", panel: "#15181F", ink: "#ECEAE4", inkSoft: "#8B94A6", line: "#23272F", copper: "#D98A5F" };
 
@@ -25,8 +26,8 @@ export default function Login() {
       justifyContent: "center", padding: 20, fontFamily: "'Google Sans','DM Sans','Segoe UI',system-ui,sans-serif" }}>
       <style>{"@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300..800&display=swap');"}</style>
       <div style={{ width: "100%", maxWidth: 360 }}>
-        <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em", textAlign: "center", marginBottom: 6 }}>
-          Nebu<span style={{ color: C.copper }}>.</span>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 6 }}>
+          <img src={nebuLogo} alt="Nebu" style={{ height: 40, width: "auto", display: "block" }} />
         </div>
         <div style={{ fontSize: 12.5, color: C.inkSoft, textAlign: "center", marginBottom: 24 }}>Sign in to your portal</div>
         <form onSubmit={submit} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 14, padding: 22 }}>
