@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { loadProjects, persistProject, db } from "./lib/db.js";
+import { loadProjects, persistProject, db, notify } from "./lib/db.js";
 import { supabase } from "./lib/supabase.js";
 import SortableList, { SortableTabs } from "./lib/SortableList.jsx";
 import nebuLogo from "./assets/nebu-logo.png";
@@ -500,6 +500,12 @@ export default function App({ mode = "admin" }) {
   };
 
   const project = projects.find(p => p.id === activeId);
+  // Resolve the client's email for a given project (project.client is the company name).
+  const clientEmailForProject = (proj) => {
+    if (!proj) return null;
+    const c = clients.find(c => c.company === proj.client);
+    return c?.email || null;
+  };
 
   // Switching projects must reset transient edit/confirm state, or actions leak onto the wrong project
   useEffect(() => {
@@ -519,27 +525,33 @@ export default function App({ mode = "admin" }) {
   const findTask = (p, sid, tid) => p.stages.find(s => s.id === sid).tasks.find(t => t.id === tid);
   const cycle = (arr) => (cur) => arr[(arr.indexOf(cur) + 1) % arr.length];
 
-  const cycleStatus = (sid, tid) => update(p => {
-    const t = findTask(p, sid, tid);
-    t.status = cycle(STATUS_ORDER)(t.status);
-    if (t.status === "done") {
-      if (t.recurrence && t.recurrence !== "none" && t.dueDate) {
-        // recurring: log this occurrence, advance to the next cycle, stay active (never vanish)
-        t.lastDone = new Date().toISOString().slice(0, 10);
-        if (t.recurrence === "daily") {
-          const d = new Date(t.dueDate + "T00:00:00"); d.setDate(d.getDate() + 1);
-          t.dueDate = d.toISOString().slice(0, 10);
-        } else {
-          t.dueDate = rollForward(t.dueDate, t.recurrence);
+  const cycleStatus = (sid, tid) => {
+    const proj = project;
+    let justCompleted = null;
+    update(p => {
+      const t = findTask(p, sid, tid);
+      t.status = cycle(STATUS_ORDER)(t.status);
+      if (t.status === "done") {
+        if (t.recurrence && t.recurrence !== "none" && t.dueDate) {
+          // recurring: log this occurrence, advance to the next cycle, stay active (never vanish)
+          t.lastDone = new Date().toISOString().slice(0, 10);
+          if (t.recurrence === "daily") {
+            const d = new Date(t.dueDate + "T00:00:00"); d.setDate(d.getDate() + 1);
+            t.dueDate = d.toISOString().slice(0, 10);
+          } else {
+            t.dueDate = rollForward(t.dueDate, t.recurrence);
+          }
+          t.status = "doing"; // recurring never "completes" — no email
+        } else if (!t.completedAt) {
+          t.completedAt = new Date().toISOString(); // one-time task completes normally
+          if (t.clientVisible) justCompleted = { title: t.title };
         }
-        t.status = "doing";
-      } else if (!t.completedAt) {
-        t.completedAt = new Date().toISOString(); // one-time task completes normally
       }
-    }
-    if (t.status !== "done") t.completedAt = null;
-    return p;
-  });
+      if (t.status !== "done") t.completedAt = null;
+      return p;
+    });
+    if (justCompleted) notify.taskCompleted(clientEmailForProject(proj), justCompleted.title, proj?.name || "");
+  };
   const cycleUrgency = (sid, tid) => update(p => { const t = findTask(p, sid, tid); t.urgency = cycle(URGENCY_ORDER)(t.urgency); return p; });
   const incCount = (sid, tid, delta) => update(p => {
     const t = findTask(p, sid, tid);
@@ -644,24 +656,30 @@ export default function App({ mode = "admin" }) {
     const t = (title || "").trim(); if (!t) return;
     update(p => { (p.looseTasks = p.looseTasks || []).push(mkTask(t)); return p; });
   };
-  const cycleLooseStatus = (tid) => update(p => {
-    const t = findLoose(p, tid); if (!t) return p;
-    t.status = cycle(STATUS_ORDER)(t.status);
-    if (t.status === "done") {
-      if (t.recurrence && t.recurrence !== "none" && t.dueDate) {
-        t.lastDone = new Date().toISOString().slice(0, 10);
-        if (t.recurrence === "daily") {
-          const d = new Date(t.dueDate + "T00:00:00"); d.setDate(d.getDate() + 1);
-          t.dueDate = d.toISOString().slice(0, 10);
-        } else { t.dueDate = rollForward(t.dueDate, t.recurrence); }
-        t.status = "doing";
-      } else if (!t.completedAt) {
-        t.completedAt = new Date().toISOString();
+  const cycleLooseStatus = (tid) => {
+    const proj = project;
+    let justCompleted = null; // task that transitioned to a real completion
+    update(p => {
+      const t = findLoose(p, tid); if (!t) return p;
+      t.status = cycle(STATUS_ORDER)(t.status);
+      if (t.status === "done") {
+        if (t.recurrence && t.recurrence !== "none" && t.dueDate) {
+          t.lastDone = new Date().toISOString().slice(0, 10);
+          if (t.recurrence === "daily") {
+            const d = new Date(t.dueDate + "T00:00:00"); d.setDate(d.getDate() + 1);
+            t.dueDate = d.toISOString().slice(0, 10);
+          } else { t.dueDate = rollForward(t.dueDate, t.recurrence); }
+          t.status = "doing"; // recurring never "completes" — no email
+        } else if (!t.completedAt) {
+          t.completedAt = new Date().toISOString();
+          if (t.clientVisible) justCompleted = { title: t.title }; // one-time + visible → email
+        }
       }
-    }
-    if (t.status !== "done") t.completedAt = null;
-    return p;
-  });
+      if (t.status !== "done") t.completedAt = null;
+      return p;
+    });
+    if (justCompleted) notify.taskCompleted(clientEmailForProject(proj), justCompleted.title, proj?.name || "");
+  };
   const cycleLooseUrgency = (tid) => update(p => { const t = findLoose(p, tid); if (t) t.urgency = cycle(URGENCY_ORDER)(t.urgency); return p; });
   const cycleLooseRecurrence = (tid) => update(p => {
     const t = findLoose(p, tid); if (!t) return p;
@@ -713,24 +731,36 @@ export default function App({ mode = "admin" }) {
     p.finance = orderedIds.map(id => byId[id]).filter(Boolean);
     return p; // persistProject writes new positions by array index
   });
-  const markPaid = (fid, method) => update(p => {
-    const f = (p.finance || []).find(f => f.id === fid);
-    if (!f) return p;
-    f.method = method; f.lastPaid = new Date().toISOString().slice(0, 10);
-    f.clientReportedAt = null; f.clientMethod = null; // confirming resolves any client report
-    if (f.recurrence !== "none" && f.dueDate) {
-      f.dueDate = rollForward(f.dueDate, f.recurrence); // recurring: log the payment, roll due date forward, stay pending
-    } else {
-      f.status = "paid";
-    }
-    return p;
-  });
+  const markPaid = (fid, method) => {
+    const proj = project;
+    const pay = (proj?.finance || []).find(f => f.id === fid);
+    update(p => {
+      const f = (p.finance || []).find(f => f.id === fid);
+      if (!f) return p;
+      f.method = method; f.lastPaid = new Date().toISOString().slice(0, 10);
+      f.clientReportedAt = null; f.clientMethod = null; // confirming resolves any client report
+      if (f.recurrence !== "none" && f.dueDate) {
+        f.dueDate = rollForward(f.dueDate, f.recurrence); // recurring: log the payment, roll due date forward, stay pending
+      } else {
+        f.status = "paid";
+      }
+      return p;
+    });
+    // Notify the client their payment was confirmed.
+    if (pay) notify.paymentConfirmed(clientEmailForProject(proj), pay.title, pay.amount, proj?.name || "");
+  };
   // Client-side action (portal): the client reports having paid; admin still confirms
-  const reportPaymentClient = (fid, method) => update(p => {
-    const f = (p.finance || []).find(f => f.id === fid);
-    if (f) { f.clientReportedAt = new Date().toISOString().slice(0, 10); f.clientMethod = method; }
-    return p;
-  });
+  const reportPaymentClient = (fid, method) => {
+    const proj = project;
+    const pay = (proj?.finance || []).find(f => f.id === fid);
+    update(p => {
+      const f = (p.finance || []).find(f => f.id === fid);
+      if (f) { f.clientReportedAt = new Date().toISOString().slice(0, 10); f.clientMethod = method; }
+      return p;
+    });
+    // Alert the admin to verify the reported payment.
+    if (pay) notify.paymentReported(pay.title, pay.amount, method, proj?.name || "", proj?.client || "");
+  };
   const rejectPaymentReport = (fid) => update(p => {
     const f = (p.finance || []).find(f => f.id === fid);
     if (f) { f.clientReportedAt = null; f.clientMethod = null; }
@@ -826,7 +856,10 @@ export default function App({ mode = "admin" }) {
         onExit={() => supabase.auth.signOut()} exitLabel="Sign out"
         projects={projects} activeId={activeId} setActiveId={setActiveId}
         onReportPayment={(fid, method) => {
+          const pay = (project?.finance || []).find(f => f.id === fid);
           update(p => { const f = (p.finance || []).find(f => f.id === fid); if (f) { f.clientReportedAt = new Date().toISOString().slice(0,10); f.clientMethod = method; } return p; });
+          // Alert the admin that this client reported a payment to verify.
+          if (pay) notify.paymentReported(pay.title, pay.amount, method, project?.name || "", project?.client || "");
         }} />
     );
   }

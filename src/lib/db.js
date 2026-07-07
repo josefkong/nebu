@@ -395,3 +395,83 @@ export async function persistProject(p) {
   }));
   if (looseRows.length) await supabase.from("project_tasks").upsert(looseRows);
 }
+
+// ============================================================================
+// Email notifications (Phase 1) — action-triggered only.
+// Calls the send-notification Edge Function, which sends via Resend.
+// All sends are fire-and-forget and never throw into the UI: a failed email
+// must not break saving a task or confirming a payment. Failures are logged.
+// ============================================================================
+
+const ADMIN_EMAIL = "josefkong@nebuspace.com.br"; // where "payment reported" alerts go
+
+// Shared HTML shell so every email looks consistent and on-brand.
+function emailShell(heading, bodyHtml) {
+  return `
+  <div style="font-family:'Segoe UI',system-ui,sans-serif;background:#0D0F13;color:#ECEAE4;padding:32px 24px;border-radius:12px;max-width:520px;margin:0 auto;">
+    <div style="font-size:22px;font-weight:700;letter-spacing:-0.01em;margin-bottom:20px;">nebu<span style="color:#D98A5F;">.</span></div>
+    <h1 style="font-size:17px;font-weight:600;margin:0 0 12px;">${heading}</h1>
+    <div style="font-size:14px;line-height:1.6;color:#C9CDD6;">${bodyHtml}</div>
+    <div style="margin-top:28px;padding-top:16px;border-top:1px solid #23272F;font-size:11px;color:#8B94A6;">
+      Sent from your Nebu client portal · nebuspace.com.br
+    </div>
+  </div>`;
+}
+
+async function sendEmail(to, subject, html) {
+  if (!to) { console.warn("sendEmail: no recipient, skipping", subject); return; }
+  try {
+    const { error } = await supabase.functions.invoke("send-notification", {
+      body: { to, subject, html },
+    });
+    if (error) console.error("Notification send failed:", error);
+  } catch (e) {
+    console.error("Notification send threw:", e);
+  }
+}
+
+export const notify = {
+  // A task the client can see was completed → reassure the client it's done.
+  taskCompleted(clientEmail, taskTitle, projectName) {
+    if (!clientEmail) return;
+    const subject = `Task completed: ${taskTitle}`;
+    const html = emailShell(
+      "A task on your project is complete",
+      `<p>Good news — the following task on <strong>${projectName}</strong> has been marked complete:</p>
+       <p style="background:#15181F;border:1px solid #23272F;border-radius:8px;padding:12px 14px;color:#ECEAE4;">${taskTitle}</p>
+       <p>You can see the full picture anytime in your portal.</p>`,
+    );
+    return sendEmail(clientEmail, subject, html);
+  },
+
+  // Client reported they paid → alert the admin to verify it was received.
+  paymentReported(paymentTitle, amount, method, projectName, clientCompany) {
+    const subject = `Payment reported: ${paymentTitle} (${clientCompany})`;
+    const amountStr = amount != null ? `R$ ${Number(amount).toLocaleString("pt-BR")}` : "";
+    const html = emailShell(
+      "A client reported a payment",
+      `<p><strong>${clientCompany}</strong> reported a payment on <strong>${projectName}</strong>:</p>
+       <p style="background:#15181F;border:1px solid #23272F;border-radius:8px;padding:12px 14px;color:#ECEAE4;">
+         ${paymentTitle}${amountStr ? ` — ${amountStr}` : ""}${method ? `<br>Method: ${method}` : ""}
+       </p>
+       <p>Verify it was received, then confirm it in the portal to close it out.</p>`,
+    );
+    return sendEmail(ADMIN_EMAIL, subject, html);
+  },
+
+  // Admin confirmed a payment was received → send the client a receipt.
+  paymentConfirmed(clientEmail, paymentTitle, amount, projectName) {
+    if (!clientEmail) return;
+    const subject = `Payment confirmed: ${paymentTitle}`;
+    const amountStr = amount != null ? `R$ ${Number(amount).toLocaleString("pt-BR")}` : "";
+    const html = emailShell(
+      "Your payment has been confirmed",
+      `<p>We've confirmed receipt of your payment on <strong>${projectName}</strong>:</p>
+       <p style="background:#15181F;border:1px solid #23272F;border-radius:8px;padding:12px 14px;color:#ECEAE4;">
+         ${paymentTitle}${amountStr ? ` — ${amountStr}` : ""}
+       </p>
+       <p>Thank you — nothing further is needed on your end.</p>`,
+    );
+    return sendEmail(clientEmail, subject, html);
+  },
+};
