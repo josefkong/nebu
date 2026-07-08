@@ -433,13 +433,30 @@ async function sendEmail(to, subject, html) {
 export const notify = {
   // A task the client can see was completed → reassure the client it's done.
   taskCompleted(clientEmail, taskTitle, projectName) {
-    if (!clientEmail) return;
+    if (!clientEmail) { console.warn(`notify.taskCompleted: no client email found for project "${projectName}" — check that the project's client matches a client record (Clients page) with an email.`); return; }
     const subject = `Task completed: ${taskTitle}`;
     const html = emailShell(
       "A task on your project is complete",
       `<p>Good news — the following task on <strong>${projectName}</strong> has been marked complete:</p>
        <p style="background:#15181F;border:1px solid #23272F;border-radius:8px;padding:12px 14px;color:#ECEAE4;">${taskTitle}</p>
        <p>You can see the full picture anytime in your portal.</p>`,
+    );
+    return sendEmail(clientEmail, subject, html);
+  },
+
+  // Admin created a payment the client needs to pay → notify them (it's an invoice).
+  paymentCreated(clientEmail, paymentTitle, amount, dueDate, projectName) {
+    if (!clientEmail) { console.warn(`notify.paymentCreated: no client email found for project "${projectName}" — check that the project's client matches a client record (Clients page) with an email.`); return; }
+    const amountStr = amount != null ? `R$ ${Number(amount).toLocaleString("pt-BR")}` : "";
+    const dueStr = dueDate ? new Date(dueDate + "T00:00:00").toLocaleDateString("pt-BR") : "";
+    const subject = `New payment on your project: ${paymentTitle}`;
+    const html = emailShell(
+      "A payment was added to your project",
+      `<p>A new payment item was opened on <strong>${projectName}</strong>:</p>
+       <p style="background:#15181F;border:1px solid #23272F;border-radius:8px;padding:12px 14px;color:#ECEAE4;">
+         ${paymentTitle}${amountStr ? ` — ${amountStr}` : ""}${dueStr ? `<br>Due: ${dueStr}` : ""}
+       </p>
+       <p>You can view the details and report your payment anytime in your portal.</p>`,
     );
     return sendEmail(clientEmail, subject, html);
   },
@@ -461,7 +478,7 @@ export const notify = {
 
   // Admin confirmed a payment was received → send the client a receipt.
   paymentConfirmed(clientEmail, paymentTitle, amount, projectName) {
-    if (!clientEmail) return;
+    if (!clientEmail) { console.warn(`notify.paymentConfirmed: no client email found for project "${projectName}" — check that the project's client matches a client record (Clients page) with an email.`); return; }
     const subject = `Payment confirmed: ${paymentTitle}`;
     const amountStr = amount != null ? `R$ ${Number(amount).toLocaleString("pt-BR")}` : "";
     const html = emailShell(

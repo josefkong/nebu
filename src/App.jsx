@@ -501,9 +501,12 @@ export default function App({ mode = "admin" }) {
 
   const project = projects.find(p => p.id === activeId);
   // Resolve the client's email for a given project (project.client is the company name).
+  // Trimmed + case-insensitive so "grupo a7 " still matches "Grupo A7".
   const clientEmailForProject = (proj) => {
     if (!proj) return null;
-    const c = clients.find(c => c.company === proj.client);
+    const key = String(proj.client || "").trim().toLowerCase();
+    if (!key) return null;
+    const c = clients.find(c => String(c.company || "").trim().toLowerCase() === key);
     return c?.email || null;
   };
 
@@ -722,7 +725,12 @@ export default function App({ mode = "admin" }) {
   };
 
   // ----- finance operations -----
-  const addPayment = (item) => update(p => { (p.finance = p.finance || []).push(mkPayment(item)); return p; });
+  const addPayment = (item) => {
+    const proj = project;
+    update(p => { (p.finance = p.finance || []).push(mkPayment(item)); return p; });
+    // A new payment is effectively an invoice — notify the client it's open.
+    notify.paymentCreated(clientEmailForProject(proj), item.title || "Payment", item.amount, item.dueDate || null, proj?.name || "");
+  };
   const deletePayment = (fid) => { update(p => { p.finance = (p.finance || []).filter(f => f.id !== fid); return p; }); db.deletePayment(fid).catch(e => console.error(e)); };
   const savePayment = (fid, patch) => update(p => { const f = (p.finance || []).find(f => f.id === fid); if (f) Object.assign(f, patch); return p; });
   const reorderPayments = (orderedIds) => update(p => {
