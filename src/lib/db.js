@@ -266,6 +266,19 @@ export const db = {
       supabase.from("meetings").update({ position: i }).eq("id", id)));
   },
 
+  // Portal access (admin-only Edge Function): which client emails have logins, and inviting.
+  async checkPortalUsers(emails) {
+    const { data, error } = await supabase.functions.invoke("portal-access", { body: { action: "check", emails } });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    return data?.users || {};
+  },
+  async invitePortalUser(email) {
+    const { data, error } = await supabase.functions.invoke("portal-access", { body: { action: "invite", email } });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+  },
+
   // Loose tasks (project_tasks) — one-off tasks not tied to a stage
   async deleteLooseTask(id) {
     const { error } = await supabase.from("project_tasks").delete().eq("id", id);

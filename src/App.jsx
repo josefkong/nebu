@@ -712,15 +712,30 @@ export default function App({ mode = "admin" }) {
     p.accesses = orderedIds.map(id => byId[id]).filter(Boolean);
     return p; // persistProject writes new positions by array index
   });
+  const resetNewProject = () => { setShowNewProject(false); setNpName(""); setNpClientId(""); setNpNewName(""); setNpNewCompany(""); setNpNewEmail(""); };
   const addProject = async () => {
     if (!npName.trim()) return;
-    const name = npName.trim(); const client = npClient.trim() || "—";
-    setShowNewProject(false); setNpName(""); setNpClient("");
+    const name = npName.trim();
     try {
-      const id = await db.createProject({ name, client });
+      // Resolve the client: an existing record, a brand-new one, or none.
+      let clientRec = null; // { id, company }
+      if (npClientId === "__new__") {
+        if (!npNewName.trim() || !npNewEmail.trim()) return; // new client needs at least name + email
+        const company = npNewCompany.trim() || npNewName.trim();
+        const cid = await db.createClient({ name: npNewName.trim(), company, email: npNewEmail.trim() });
+        clientRec = { id: cid, company };
+      } else if (npClientId) {
+        const c = clients.find(c => c.id === npClientId);
+        if (c) clientRec = { id: c.id, company: (c.company || c.name || "").trim() };
+      }
+      resetNewProject();
+      const id = await db.createProject({ name, client: clientRec?.company || "—" });
+      // Auto-grant portal access so notifications AND portal visibility line up in one step.
+      if (clientRec?.id) await db.grantAccess(clientRec.id, id).catch(e => console.error("grant access failed", e));
       const fresh = await loadProjects();
       setProjects(fresh);
       setActiveId(id);
+      db.loadClients().then(setClients).catch(() => {});
     } catch (e) { console.error("create project failed", e); }
   };
 
@@ -972,11 +987,25 @@ export default function App({ mode = "admin" }) {
                 <div style={{ padding: 10, background: "rgba(255,255,255,.06)", borderRadius: 8, marginTop: 6 }}>
                   <input value={npName} onChange={e => setNpName(e.target.value)} placeholder="Project name"
                     style={{ width: "100%", boxSizing: "border-box", marginBottom: 6, padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
-                  <input value={npClient} onChange={e => setNpClient(e.target.value)} placeholder="Client name"
-                    style={{ width: "100%", boxSizing: "border-box", marginBottom: 8, padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
+                  <select value={npClientId} onChange={e => setNpClientId(e.target.value)}
+                    style={{ width: "100%", boxSizing: "border-box", marginBottom: 6, padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }}>
+                    <option value="">No client (internal)</option>
+                    {clients.map(c => <option key={c.id} value={c.id}>{c.name}{c.company ? ` — ${c.company}` : ""}</option>)}
+                    <option value="__new__">+ New client…</option>
+                  </select>
+                  {npClientId === "__new__" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 2 }}>
+                      <input value={npNewName} onChange={e => setNpNewName(e.target.value)} placeholder="Client name *"
+                        style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
+                      <input value={npNewCompany} onChange={e => setNpNewCompany(e.target.value)} placeholder="Company (defaults to name)"
+                        style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
+                      <input value={npNewEmail} onChange={e => setNpNewEmail(e.target.value)} placeholder="Email for notifications *"
+                        style={{ width: "100%", boxSizing: "border-box", marginBottom: 4, padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
+                    </div>
+                  )}
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={addProject} style={{ flex: 1, padding: "7px 0", borderRadius: 6, border: "none", background: PALETTE.copper, color: PALETTE.graphite, fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Create</button>
-                    <button onClick={() => { setShowNewProject(false); setNpName(""); setNpClient(""); }} style={{ flex: 1, padding: "7px 0", borderRadius: 6, border: "1px solid rgba(255,255,255,.25)", background: "transparent", color: "inherit", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                    <button onClick={resetNewProject} style={{ flex: 1, padding: "7px 0", borderRadius: 6, border: "1px solid rgba(255,255,255,.25)", background: "transparent", color: "inherit", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
                   </div>
                 </div>
               ) : (
@@ -2196,6 +2225,25 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
   const [editId, setEditId] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
   const [resetSent, setResetSent] = useState(null); // client id, transient confirmation
+  // Which client emails have a portal login (email -> bool). Loaded via the
+  // admin-only portal-access function; fails soft if the function is absent.
+  const [portalUsers, setPortalUsers] = useState({});
+  const [inviting, setInviting] = useState(null); // client id being invited
+  useEffect(() => {
+    const emails = clients.map(c => c.email).filter(Boolean);
+    if (!emails.length) return;
+    db.checkPortalUsers(emails).then(m => setPortalUsers(m || {})).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clients.length]);
+  const invite = async (c) => {
+    if (!c.email) return;
+    setInviting(c.id);
+    try {
+      await db.invitePortalUser(c.email);
+      setPortalUsers(m => ({ ...m, [c.email]: true }));
+    } catch (e) { console.error("invite failed", e); alert("Invite failed: " + (e.message || e)); }
+    setInviting(null);
+  };
   const reorderClientsByIds = (orderedIds) => {
     setClients(cs => {
       const byId = Object.fromEntries(cs.map(c => [c.id, c]));
@@ -2245,7 +2293,7 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
         <button onClick={() => setShowAdd(v => !v)} style={primaryBtn}>{showAdd ? "Close" : "+ Add client"}</button>
       </div>
       <p style={{ fontSize: 12, color: T.inkSoft, margin: "0 0 18px" }}>
-        Manage who can sign in to the client portal. Access controls here are a working mock until authentication is wired to a backend.
+        Manage who can sign in to the client portal. "Invite to portal" creates their login and emails them a branded setup link.
       </p>
 
       {showAdd && <ClientForm onSubmit={async (c) => { setShowAdd(false); try { await db.createClient(c); reloadClients(); } catch (e) { console.error(e); } }} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />}
@@ -2277,6 +2325,14 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
                     <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 3, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                       {c.company} · <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="mail" size={11} style={{ verticalAlign: 0 }} />{c.email}</span><CopyButton value={c.email} T={T} />
                       {c.lastReset && <> · password reset sent {fmtDate(c.lastReset)}</>}
+                      {c.email && portalUsers[c.email] === true && <span style={{ fontSize: 10, fontWeight: 700, color: dark ? "#9CC4A8" : "#3E7050", background: dark ? "#1B2A20" : "#E6F0E9", borderRadius: 999, padding: "2px 8px" }}>Portal login active</span>}
+                      {c.email && portalUsers[c.email] === false && (
+                        <button onClick={() => invite(c)} disabled={inviting === c.id}
+                          title="No portal login yet — send the invitation email"
+                          style={{ fontSize: 10, fontWeight: 700, color: T.accent, background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 999, padding: "2px 9px", cursor: "pointer", fontFamily: "inherit", opacity: inviting === c.id ? 0.6 : 1 }}>
+                          {inviting === c.id ? "Inviting…" : "No login — Invite to portal"}
+                        </button>
+                      )}
                     </div>
                     <div style={{ marginTop: 7 }}>
                       <select value="" onChange={e => { if (e.target.value) toggleAccess(c.id, e.target.value); }}
