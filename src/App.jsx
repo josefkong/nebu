@@ -483,7 +483,9 @@ export default function App({ mode = "admin" }) {
   const go = (p) => { setPage(p); if (isMobile) setSidebarOpen(false); };
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [clientPreview, setClientPreview] = useState(false); // 'projects' | 'calendar'
-  const [npName, setNpName] = useState(""); const [npClient, setNpClient] = useState("");
+  const [npName, setNpName] = useState("");
+  const [npClientId, setNpClientId] = useState(""); // "" = no client, "__new__" = create one inline
+  const [npNewName, setNpNewName] = useState(""); const [npNewCompany, setNpNewCompany] = useState(""); const [npNewEmail, setNpNewEmail] = useState("");
   const [editingProject, setEditingProject] = useState(false);
   const [editingStage, setEditingStage] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
