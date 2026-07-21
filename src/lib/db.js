@@ -27,7 +27,7 @@ export async function loadProjects() {
       ),
       finance:finance ( id, title, category, payee, amount, due_date, recurrence, status,
                         last_paid, method, delivered_at, note, client_reported_at, client_method, position ),
-      accesses:accesses ( id, label, category, username, password, url, note, position ),
+      accesses:accesses ( id, label, category, username, secret_id, url, note, position ),
       meetings:meetings ( id, title, meeting_date, meeting_time, agenda, links, client_visible, position, created_at ),
       looseTasks:project_tasks ( id, title, status, urgency, client_visible, note, created_at, completed_at, due_date, recurrence, last_done, position ),
       activity:activity ( id, when_label, text, created_at )
@@ -81,7 +81,7 @@ const dbFinanceToUI = (f) => ({
 
 const dbAccessToUI = (a) => ({
   id: a.id, label: a.label, category: a.category, username: a.username || "",
-  password: a.password || "", url: a.url || "", note: a.note || "",
+  password: "", hasPassword: !!a.secret_id, url: a.url || "", note: a.note || "",
 });
 
 const dbMeetingToUI = (m) => ({
@@ -206,12 +206,25 @@ export const db = {
 
   // Accesses
   async createAccess(projectId, item, position) {
-    const { error } = await supabase.from("accesses").insert({
+    const { data, error } = await supabase.from("accesses").insert({
       project_id: projectId, label: item.label, category: item.category,
-      username: item.username || "", password: item.password || "",
+      username: item.username || "",
       url: item.url || "", note: item.note || "", position,
-    });
+    }).select("id").single();
     if (error) throw error;
+    if (item.password) await this.setAccessPassword(data.id, item.password);
+    return data.id;
+  },
+
+  // Credentials live encrypted in Supabase Vault; these RPCs are admin-only.
+  async setAccessPassword(id, password) {
+    const { error } = await supabase.rpc("set_access_secret", { p_access_id: id, p_password: password });
+    if (error) throw error;
+  },
+  async revealAccessPassword(id) {
+    const { data, error } = await supabase.rpc("get_access_secret", { p_access_id: id });
+    if (error) throw error;
+    return data || "";
   },
   async updateAccess(id, patch) {
     const { error } = await supabase.from("accesses").update(patch).eq("id", id);
@@ -388,7 +401,7 @@ export async function persistProject(p) {
   // accesses
   const accRows = (p.accesses || []).map((a, i) => ({
     id: a.id, project_id: p.id, label: a.label, category: a.category,
-    username: a.username || "", password: a.password || "", url: a.url || "",
+    username: a.username || "", url: a.url || "",
     note: a.note || "", position: i,
   }));
   if (accRows.length) await supabase.from("accesses").upsert(accRows);

@@ -251,7 +251,7 @@ const mkPayment = (o = {}) => ({
   clientReportedAt: null, clientMethod: null, ...o,
 });
 const ACCESS_CATEGORIES = { email: "Email", domain: "Domain", social: "Social", platform: "Platform", gateway: "Gateway", tool: "Tool", other: "Other" };
-const mkAccess = (o = {}) => ({ id: uid(), label: "", category: "tool", username: "", password: "", url: "", note: "", ...o });
+const mkAccess = (o = {}) => ({ id: uid(), label: "", category: "tool", username: "", password: "", url: "", note: "", ...o, hasPassword: !!o.password });
 // Clipboard with fallback: in sandboxed iframes navigator.clipboard.writeText REJECTS,
 // so it must be awaited inside try/catch — returning the promise directly skips the fallback.
 async function copyText(text) {
@@ -631,8 +631,17 @@ export default function App({ mode = "admin" }) {
   };
 
   // ----- access operations -----
-  const addAccess = (item) => update(p => { (p.accesses = p.accesses || []).push(mkAccess(item)); return p; });
-  const saveAccess = (aid, patch) => update(p => { const a = (p.accesses || []).find(a => a.id === aid); if (a) Object.assign(a, patch); return p; });
+  const addAccess = (item) => {
+    const a = mkAccess(item);
+    const pw = a.password; a.password = ""; // plaintext never lives in state
+    update(p => { (p.accesses = p.accesses || []).push(a); return p; });
+    if (pw) db.setAccessPassword(a.id, pw).catch(e => console.error("store credential failed", e));
+  };
+  const saveAccess = (aid, patch) => {
+    const pw = patch.password; const rest = { ...patch }; delete rest.password;
+    update(p => { const a = (p.accesses || []).find(a => a.id === aid); if (a) { Object.assign(a, rest); if (pw) a.hasPassword = true; } return p; });
+    if (pw) db.setAccessPassword(aid, pw).catch(e => console.error("store credential failed", e));
+  };
   const deleteAccess = (aid) => { update(p => { p.accesses = (p.accesses || []).filter(a => a.id !== aid); return p; }); db.deleteAccess(aid).catch(e => console.error(e)); };
 
   // ----- meetings (facts persist via update(); private notes via dedicated calls) -----
@@ -1853,6 +1862,17 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
   const [editId, setEditId] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
   const [revealed, setRevealed] = useState({}); // id -> bool
+  const [secrets, setSecrets] = useState({}); // id -> decrypted value, fetched on reveal
+  const revealSecret = async (id) => {
+    if (revealed[id]) { setRevealed(r => ({ ...r, [id]: false })); return; }
+    if (secrets[id] === undefined) {
+      try {
+        const v = await db.revealAccessPassword(id);
+        setSecrets(sx => ({ ...sx, [id]: v ?? "" }));
+      } catch (e) { console.error("reveal failed", e); return; }
+    }
+    setRevealed(r => ({ ...r, [id]: true }));
+  };
   const canReorder = filter === "all"; // ordering only meaningful on the unfiltered list
   const reorderAccessesByIds = (orderedIds) => {
     reorderAccesses(orderedIds); // parent reorders within active project + persists
@@ -1861,24 +1881,28 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
   const visible = accesses.filter(a => filter === "all" ? true : a.category === filter);
 
   // Fixed label column so values align vertically; empty fields stay visible for consistent card size
-  const Field = ({ label, value, secret, link, id }) => {
-    const shown = !secret || revealed[id];
+  const Field = ({ label, value, secret, has, link, id }) => {
+    // Secret fields: `has` says a credential exists; the value itself lives
+    // encrypted in Vault and is fetched only when revealed.
+    const shown = secret ? !!revealed[id] : true;
+    const display = secret ? (shown ? (secrets[id] ?? "") : "\u2022".repeat(8)) : value;
+    const present = secret ? has : !!value;
     return (
       <>
         <span style={{ color: T.inkSoft, fontSize: 11.5 }}>{label}</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 2, minHeight: 22, minWidth: 0, flexWrap: "wrap" }}>
-          {value ? (
+          {present ? (
             <>
               <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11.5, letterSpacing: shown ? 0 : 1.5, overflowWrap: "anywhere", wordBreak: "break-word", minWidth: 0 }}>
-                {shown ? value : "\u2022".repeat(Math.min(value.length, 10))}
+                {display}
               </span>
               {secret && (
-                <button onClick={() => setRevealed(r => ({ ...r, [id]: !r[id] }))} title={shown ? "Hide" : "Show"}
+                <button onClick={() => revealSecret(id)} title={shown ? "Hide" : "Show (decrypts on demand)"}
                   style={{ border: "none", background: "transparent", cursor: "pointer", padding: "2px 4px", color: T.inkSoft, display: "inline-flex" }}>
                   <Icon name={shown ? "eyeOff" : "eye"} size={12} style={{ verticalAlign: 0 }} />
                 </button>
               )}
-              {!link && <CopyButton value={value} T={T} />}
+              {!link && (!secret || shown) && <CopyButton value={secret ? (secrets[id] ?? "") : value} T={T} />}
               {link && (
                 <button onClick={() => window.open(normalizeUrl(value), "_blank", "noopener,noreferrer")} title="Open in new tab"
                   style={{ border: "none", background: "transparent", cursor: "pointer", padding: "2px 4px", color: T.inkSoft, display: "inline-flex" }}>
@@ -1934,7 +1958,7 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "72px minmax(0, 1fr)", rowGap: 2, alignItems: "center" }}>
                     <Field label="Login" value={a.username} id={a.id + "u"} />
-                    <Field label="Password" value={a.password} secret id={a.id} />
+                    <Field label="Password" secret has={a.hasPassword} id={a.id} />
                     <Field label="URL" value={a.url} link id={a.id + "l"} />
                     <span style={{ color: T.inkSoft, fontSize: 11.5 }}>Note</span>
                     <span style={{ fontSize: 11.5, color: T.inkSoft, minHeight: 22, display: "inline-flex", alignItems: "center" }}>{a.note || "\u00a0"}</span>
@@ -1957,7 +1981,7 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
         )} />
       </section>
       <p style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 10 }}>
-        Credentials are stored in plain text in this prototype. Before storing real passwords, this section needs encrypted storage.
+        Credentials are encrypted at rest (Supabase Vault) and decrypted only when you reveal them.
       </p>
     </div>
   );
@@ -1967,12 +1991,14 @@ function AccessForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
   const [label, setLabel] = useState(initial?.label || "");
   const [category, setCategory] = useState(initial?.category || "tool");
   const [username, setUsername] = useState(initial?.username || "");
-  const [password, setPassword] = useState(initial?.password || "");
+  const [password, setPassword] = useState(""); // never prefilled: stored value stays in Vault
   const [url, setUrl] = useState(initial?.url || "");
   const [note, setNote] = useState(initial?.note || "");
   const submit = () => {
     if (!label.trim()) return;
-    onSubmit({ label: label.trim(), category, username: username.trim(), password, url: url.trim(), note: note.trim() });
+    const out = { label: label.trim(), category, username: username.trim(), url: url.trim(), note: note.trim() };
+    if (password) out.password = password; // blank while editing = keep the stored credential
+    onSubmit(out);
   };
   return (
     <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 14, marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -1981,7 +2007,7 @@ function AccessForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
         {Object.entries(ACCESS_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
       </select>
       <input value={username} onChange={e => setUsername(e.target.value)} placeholder="Login / username / email" style={{ ...inputStyle, flex: "1 1 160px" }} />
-      <input value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" style={{ ...inputStyle, flex: "1 1 130px" }} />
+      <input value={password} onChange={e => setPassword(e.target.value)} placeholder={initial?.hasPassword ? "Leave blank to keep current" : "Password"} style={{ ...inputStyle, flex: "1 1 130px" }} />
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL" style={{ ...inputStyle, flex: "1 1 160px" }} />
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note" style={{ ...inputStyle, flex: "2 1 160px" }} />
       <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add access"}</button>
