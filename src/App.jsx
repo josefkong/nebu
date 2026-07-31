@@ -192,8 +192,21 @@ const STAGE_TEMPLATES = {
 };
 
 const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); };
-const mkTask = (title) => ({ id: uid(), title, status: "todo", urgency: "none", clientVisible: true, note: "", createdAt: new Date().toISOString(), completedAt: null, dueDate: null, recurrence: "none" });
+const mkTask = (o) => {
+  const base = { id: uid(), title: "", status: "todo", urgency: "none", clientVisible: true, note: "", createdAt: new Date().toISOString(), completedAt: null, dueDate: null, recurrence: "none" };
+  return typeof o === "string" ? { ...base, title: o } : { ...base, ...o };
+};
 const inDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }; // YYYY-MM-DD
+
+// Scroll to and highlight a row when the calendar sends you straight to it.
+function useFocusRow(id, focusId) {
+  const ref = useRef(null);
+  const isFocused = !!id && focusId === id;
+  useEffect(() => {
+    if (isFocused && ref.current) ref.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [isFocused]);
+  return [ref, isFocused];
+}
 
 // ---------- Typography ----------
 // Google Sans is proprietary (licensed for Google products only) and is not on Google Fonts.
@@ -272,6 +285,11 @@ async function copyText(text) {
 }
 const normalizeUrl = (u) => /^https?:\/\//i.test(u) ? u : "https://" + u;
 
+const fmtDateTime = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ", " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+};
 const fmtBRL = (v) => Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 // After paying a recurring obligation, roll its due date to the next cycle
 function rollForward(dateStr, recurrence) {
@@ -454,6 +472,8 @@ export default function App({ mode = "admin" }) {
   const taskMatchesView = (t) => taskView === "all" ? true : taskView === "completed" ? !!t.completedAt : !t.completedAt;
   const [showNewProject, setShowNewProject] = useState(false);
   const [page, setPage] = useState("projects");
+  const [addingTaskTo, setAddingTaskTo] = useState(null); // stage id currently showing the new-task form
+  const [focusId, setFocusId] = useState(null); // row to scroll to + highlight after calendar navigation
   const [projTab, setProjTab] = useState("work"); // work | meetings | tasks | finance | access inside a project
   // Tab order is a personal UI preference; persist per-device. Wrapped in try/catch
   // because storage can be unavailable (private mode / sandbox) — never crash over it.
@@ -504,6 +524,14 @@ export default function App({ mode = "admin" }) {
   const project = projects.find(p => p.id === activeId);
   // Resolve the client's email for a given project (project.client is the company name).
   // Trimmed + case-insensitive so "grupo a7 " still matches "Grupo A7".
+  // Append an entry to the finance audit trail: optimistic local update + persist.
+  const logFinance = (text) => {
+    if (!activeId || !text) return;
+    const entry = { id: uid(), text, at: new Date().toISOString() };
+    setProjects(ps => ps.map(p => p.id === activeId
+      ? { ...p, financeActivity: [entry, ...(p.financeActivity || [])] } : p));
+    db.logFinance(activeId, text).catch(e => console.error(e));
+  };
   const clientEmailForProject = (proj) => {
     if (!proj) return null;
     const key = String(proj.client || "").trim().toLowerCase();
@@ -572,17 +600,27 @@ export default function App({ mode = "admin" }) {
   });
   const toggleVis = (sid, tid) => update(p => { const t = findTask(p, sid, tid); t.clientVisible = !t.clientVisible; return p; });
 
-  const addTask = (sid) => {
-    const title = (newTask[sid] || "").trim(); if (!title) return;
-    update(p => { p.stages.find(s => s.id === sid).tasks.push(mkTask(title)); return p; });
-    setNewTask(nt => ({ ...nt, [sid]: "" }));
+  const addTask = (sid, item) => {
+    const t = typeof item === "string" ? { title: item } : (item || {});
+    if (!String(t.title || "").trim()) return;
+    update(p => { p.stages.find(s => s.id === sid).tasks.push(mkTask(t)); return p; });
   };
   const deleteTask = (sid, tid) => {
     update(p => { const s = p.stages.find(s => s.id === sid); s.tasks = s.tasks.filter(t => t.id !== tid); return p; });
     db.deleteTask(tid).catch(e => console.error(e));
   };
-  const saveTaskEdit = (sid, tid, title, note, due, recurrence) => {
-    update(p => { const t = findTask(p, sid, tid); t.title = title.trim() || t.title; t.note = note.trim(); t.dueDate = due || null; t.recurrence = recurrence || "none"; return p; });
+  const saveTaskEdit = (sid, tid, patch) => {
+    update(p => {
+      const t = findTask(p, sid, tid);
+      t.title = String(patch.title || "").trim() || t.title;
+      t.note = String(patch.note || "").trim();
+      t.dueDate = patch.dueDate || null;
+      t.recurrence = patch.recurrence || "none";
+      if (patch.urgency !== undefined) t.urgency = patch.urgency;
+      if (patch.status !== undefined) t.status = patch.status;
+      if (patch.clientVisible !== undefined) t.clientVisible = patch.clientVisible;
+      return p;
+    });
     setEditingTask(null);
   };
   const tplTask = (t) => ({
@@ -666,8 +704,9 @@ export default function App({ mode = "admin" }) {
 
   // ----- loose tasks (project_tasks): one-off tasks not tied to a stage -----
   const findLoose = (p, tid) => (p.looseTasks || []).find(t => t.id === tid);
-  const addLooseTask = (title) => {
-    const t = (title || "").trim(); if (!t) return;
+  const addLooseTask = (item) => {
+    const t = typeof item === "string" ? { title: item } : (item || {});
+    if (!String(t.title || "").trim()) return;
     update(p => { (p.looseTasks = p.looseTasks || []).push(mkTask(t)); return p; });
   };
   const cycleLooseStatus = (tid) => {
@@ -702,9 +741,15 @@ export default function App({ mode = "admin" }) {
     return p;
   });
   const toggleLooseVis = (tid) => update(p => { const t = findLoose(p, tid); if (t) t.clientVisible = !t.clientVisible; return p; });
-  const saveLooseTask = (tid, title, note, due, recurrence) => update(p => {
+  const saveLooseTask = (tid, patch) => update(p => {
     const t = findLoose(p, tid); if (!t) return p;
-    t.title = title.trim() || t.title; t.note = note.trim(); t.dueDate = due || null; t.recurrence = recurrence || "none";
+    t.title = String(patch.title || "").trim() || t.title;
+    t.note = String(patch.note || "").trim();
+    t.dueDate = patch.dueDate || null;
+    t.recurrence = patch.recurrence || "none";
+    if (patch.urgency !== undefined) t.urgency = patch.urgency;
+    if (patch.status !== undefined) t.status = patch.status;
+    if (patch.clientVisible !== undefined) t.clientVisible = patch.clientVisible;
     return p;
   });
   const deleteLooseTask = (tid) => {
@@ -754,10 +799,16 @@ export default function App({ mode = "admin" }) {
   const addPayment = (item) => {
     const proj = project;
     update(p => { (p.finance = p.finance || []).push(mkPayment(item)); return p; });
+    logFinance(`Payment created: ${item.title || "Payment"}${item.amount ? ` \u2014 ${fmtBRL(item.amount)}` : ""}`);
     // A new payment is effectively an invoice — notify the client it's open.
     notify.paymentCreated(clientEmailForProject(proj), item.title || "Payment", item.amount, item.dueDate || null, proj?.name || "");
   };
-  const deletePayment = (fid) => { update(p => { p.finance = (p.finance || []).filter(f => f.id !== fid); return p; }); db.deletePayment(fid).catch(e => console.error(e)); };
+  const deletePayment = (fid) => {
+    const pay = (project?.finance || []).find(f => f.id === fid);
+    update(p => { p.finance = (p.finance || []).filter(f => f.id !== fid); return p; });
+    if (pay) logFinance(`Payment deleted: ${pay.title || "Payment"}${pay.amount ? ` \u2014 ${fmtBRL(pay.amount)}` : ""}`);
+    db.deletePayment(fid).catch(e => console.error(e));
+  };
   const savePayment = (fid, patch) => update(p => { const f = (p.finance || []).find(f => f.id === fid); if (f) Object.assign(f, patch); return p; });
   const reorderPayments = (orderedIds) => update(p => {
     const arr = p.finance || [];
@@ -780,8 +831,12 @@ export default function App({ mode = "admin" }) {
       }
       return p;
     });
-    // Notify the client their payment was confirmed.
-    if (pay) notify.paymentConfirmed(clientEmailForProject(proj), pay.title, pay.amount, proj?.name || "");
+    if (pay) {
+      const recurring = pay.recurrence && pay.recurrence !== "none" && pay.dueDate;
+      logFinance(`Payment confirmed: ${pay.title || "Payment"}${pay.amount ? ` \u2014 ${fmtBRL(pay.amount)}` : ""} (${method})${recurring ? " \u2014 next cycle scheduled" : ""}`);
+      // Notify the client their payment was confirmed.
+      notify.paymentConfirmed(clientEmailForProject(proj), pay.title, pay.amount, proj?.name || "");
+    }
   };
   // Client-side action (portal): the client reports having paid; admin still confirms
   const reportPaymentClient = (fid, method) => {
@@ -792,14 +847,21 @@ export default function App({ mode = "admin" }) {
       if (f) { f.clientReportedAt = new Date().toISOString().slice(0, 10); f.clientMethod = method; }
       return p;
     });
-    // Alert the admin to verify the reported payment.
-    if (pay) notify.paymentReported(pay.title, pay.amount, method, proj?.name || "", proj?.client || "");
+    if (pay) {
+      logFinance(`Client reported payment: ${pay.title || "Payment"}${pay.amount ? ` \u2014 ${fmtBRL(pay.amount)}` : ""} (${method})`);
+      // Alert the admin to verify the reported payment.
+      notify.paymentReported(pay.title, pay.amount, method, proj?.name || "", proj?.client || "");
+    }
   };
-  const rejectPaymentReport = (fid) => update(p => {
-    const f = (p.finance || []).find(f => f.id === fid);
-    if (f) { f.clientReportedAt = null; f.clientMethod = null; }
-    return p;
-  });
+  const rejectPaymentReport = (fid) => {
+    const pay = (project?.finance || []).find(f => f.id === fid);
+    update(p => {
+      const f = (p.finance || []).find(f => f.id === fid);
+      if (f) { f.clientReportedAt = null; f.clientMethod = null; }
+      return p;
+    });
+    if (pay) logFinance(`Payment report rejected: ${pay.title || "Payment"} \u2014 awaiting payment again`);
+  };
 
   // ----- drag and drop (dnd-kit reorder by ordered id lists) -----
   const taskDragFromStage = useRef(null); // reserved for cross-stage moves
@@ -869,7 +931,7 @@ export default function App({ mode = "admin" }) {
         .map(t => ({ ...t, projectId: p.id, projectName: p.name, client: p.client, stageName: s.name }))),
       ...(p.looseTasks || [])
         .filter(t => t.status !== "done")
-        .map(t => ({ ...t, projectId: p.id, projectName: p.name, client: p.client, stageName: "Task" })),
+        .map(t => ({ ...t, projectId: p.id, projectName: p.name, client: p.client, stageName: "Task", isLoose: true })),
     ]), [projects]);
 
   // All dated meetings across every project, flattened for the calendar
@@ -1055,7 +1117,7 @@ export default function App({ mode = "admin" }) {
           style={{ display: "flex", alignItems: "center", justifyContent: sidebarOpen ? "flex-start" : "center", gap: 9,
             width: sidebarOpen ? "calc(100% - 24px)" : "100%", margin: sidebarOpen ? "4px 12px" : "4px 0", padding: sidebarOpen ? "9px 12px" : "10px 0",
             background: "transparent", border: "none", borderRadius: 6, color: "inherit", cursor: "pointer", fontFamily: "inherit", fontSize: 13, opacity: 0.7 }}>
-          <Icon name="externalLink" size={14} style={{ verticalAlign: 0, flexShrink: 0 }} />{sidebarOpen && <span>Sign out</span>}
+          <Icon name="externalLink" size={14} style={{ verticalAlign: 0, flexShrink: 0 }} />{sidebarOpen && <span>Sign Out</span>}
         </button>
         {sidebarOpen && <div style={{ padding: "12px 20px", fontSize: 10.5, opacity: 0.4 }}>Drag the grip handle to reorder stages, tasks, and projects</div>}
       </aside>
@@ -1065,7 +1127,11 @@ export default function App({ mode = "admin" }) {
         <CalendarOverview
           T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
           allPending={allPending} allMeetings={allMeetings} urgencyMap={URGENCY}
-          openProject={(pid) => { setActiveId(pid); setPage("projects"); }}
+          openProject={(pid, opts) => {
+            setActiveId(pid); setPage("projects");
+            if (opts?.tab) setProjTab(opts.tab);
+            if (opts?.focusId) { setFocusId(opts.focusId); setTimeout(() => setFocusId(null), 4000); }
+          }}
         />
       ) : page === "settings" ? (
         <main style={{ flex: 1, padding: isMobile ? "18px 14px" : "30px 36px", maxWidth: 900, minWidth: 0 }}>
@@ -1093,7 +1159,7 @@ export default function App({ mode = "admin" }) {
                   {confirmDeleteProject ? (
                     <>
                       <span style={{ fontSize: 12, fontWeight: 600, color: dangerColor }}>Delete this project and everything in it?</span>
-                      <button onClick={() => deleteProject(project.id)} style={{ ...pillBase, border: "none", background: dangerColor, color: dark ? "#0D0F13" : "#fff" }}>Delete project</button>
+                      <button onClick={() => deleteProject(project.id)} style={{ ...pillBase, border: "none", background: dangerColor, color: dark ? "#0D0F13" : "#fff" }}>Delete Project</button>
                       <button onClick={() => setConfirmDeleteProject(false)} style={{ ...iconBtn, fontSize: 12 }}>Cancel</button>
                     </>
                   ) : (
@@ -1148,12 +1214,12 @@ export default function App({ mode = "admin" }) {
 
           {projTab === "meetings" ? (
             <MeetingsSection key={project.id} T={T} dark={dark} dangerColor={dangerColor}
-              meetings={project.meetings || []}
+              meetings={project.meetings || []} focusId={focusId}
               addMeeting={addMeeting} saveMeeting={saveMeeting} deleteMeeting={deleteMeeting}
               inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} ghostBtn={ghostBtn} />
           ) : projTab === "tasks" ? (
             <LooseTasksSection key={project.id} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
-              tasks={project.looseTasks || []}
+              tasks={project.looseTasks || []} focusId={focusId}
               addLooseTask={addLooseTask} cycleLooseStatus={cycleLooseStatus} cycleLooseUrgency={cycleLooseUrgency}
               cycleLooseRecurrence={cycleLooseRecurrence} toggleLooseVis={toggleLooseVis}
               saveLooseTask={saveLooseTask} deleteLooseTask={deleteLooseTask} reorderLooseTasks={reorderLooseTasks}
@@ -1161,6 +1227,7 @@ export default function App({ mode = "admin" }) {
               inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
           ) : projTab === "finance" ? (
             <FinanceSection key={project.id} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
+              financeActivity={project.financeActivity || []}
               finance={project.finance || []}
               addPayment={addPayment} deletePayment={deletePayment} savePayment={savePayment} markPaid={markPaid}
               rejectPaymentReport={rejectPaymentReport} reorderPayments={reorderPayments}
@@ -1228,7 +1295,7 @@ export default function App({ mode = "admin" }) {
                 ) : confirmDeleteStage === s.id ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13, fontWeight: 600 }}>Delete "{s.name}" and its {s.tasks.length} task(s)?</span>
-                    <button onClick={() => deleteStage(s.id)} style={{ ...primaryBtn, background: dangerColor, color: dark ? "#0D0F13" : "#fff", padding: "6px 12px", fontSize: 12 }}>Delete stage</button>
+                    <button onClick={() => deleteStage(s.id)} style={{ ...primaryBtn, background: dangerColor, color: dark ? "#0D0F13" : "#fff", padding: "6px 12px", fontSize: 12 }}>Delete Stage</button>
                     <button onClick={() => setConfirmDeleteStage(null)} style={{ ...iconBtn, fontSize: 12.5 }}>Cancel</button>
                   </div>
                 ) : (
@@ -1264,17 +1331,20 @@ export default function App({ mode = "admin" }) {
                 onReorder={(ids) => reorderTasksByIds(s.id, ids)}
                 renderItem={(t, { handleProps }) => (
                 <div key={t.id}
+                  ref={focusId === t.id ? (el) => { if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); } : undefined}
                   style={{
                     display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 10, padding: "9px 0", flexWrap: "wrap", minHeight: isMobile ? 0 : 64,
                     flexDirection: isMobile ? "column" : "row",
                     borderTop: `2px solid ${T.line}`,
+                    boxShadow: focusId === t.id ? `0 0 0 2px ${T.accent}` : "none",
+                    borderRadius: focusId === t.id ? 8 : 0, transition: "box-shadow .3s ease",
                   }}>
                   {editingTask === t.id ? (
                     <div style={{ display: "flex", alignItems: "flex-start", gap: 10, width: "100%" }}>
                       <span style={{ color: T.inkSoft, display: "flex", flexShrink: 0, opacity: 0.3, paddingTop: 2 }}>
                         <Icon name="grip" size={14} />
                       </span>
-                      <TaskEditForm task={t} onSave={(title, note, due, rec) => saveTaskEdit(s.id, t.id, title, note, due, rec)} onCancel={() => setEditingTask(null)} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} />
+                      <TaskForm task={t} onSave={(patch) => saveTaskEdit(s.id, t.id, patch)} onCancel={() => setEditingTask(null)} T={T} STATUS={STATUS} URGENCY={URGENCY} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
                     </div>
                   ) : (
                     <>
@@ -1357,12 +1427,14 @@ export default function App({ mode = "admin" }) {
               )} />
 
               {taskView !== "completed" && (
-                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                  <input value={newTask[s.id] || ""} onChange={e => setNewTask(nt => ({ ...nt, [s.id]: e.target.value }))}
-                    onKeyDown={e => e.key === "Enter" && addTask(s.id)}
-                    placeholder="Add a task and press Enter"
-                    style={{ ...inputStyle, flex: 1, background: T.bg }} />
-                  <button onClick={() => addTask(s.id)} style={primaryBtn}>Add</button>
+                <div style={{ marginTop: 10 }}>
+                  {addingTaskTo === s.id ? (
+                    <TaskForm onSave={(item) => { addTask(s.id, item); setAddingTaskTo(null); }}
+                      onCancel={() => setAddingTaskTo(null)} submitLabel="Add Task"
+                      T={T} STATUS={STATUS} URGENCY={URGENCY} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
+                  ) : (
+                    <button onClick={() => setAddingTaskTo(s.id)} style={primaryBtn}>+ Add task</button>
+                  )}
                 </div>
               )}
               </>); })()}
@@ -1376,10 +1448,10 @@ export default function App({ mode = "admin" }) {
               style={{ ...inputStyle, flex: "2 1 220px", border: `1px dashed ${T.line}`, background: "transparent" }} />
             <select value={stageTemplate} onChange={e => setStageTemplate(e.target.value)} title="Stage template"
               style={{ ...inputStyle, flex: "1 1 150px" }}>
-              <option value="blank">Blank stage</option>
+              <option value="blank">Blank Stage</option>
               {Object.entries(STAGE_TEMPLATES).map(([k, t]) => <option key={k} value={k}>{t.name} ({t.tasks.length} tasks)</option>)}
             </select>
-            <button onClick={addStage} style={{ ...primaryBtn, background: "transparent", border: `1px solid ${T.accent}`, color: T.accent }}>Add stage</button>
+            <button onClick={addStage} style={{ ...primaryBtn, background: "transparent", border: `1px solid ${T.accent}`, color: T.accent }}>Add Stage</button>
           </div>
 
           {/* Activity log */}
@@ -1454,7 +1526,7 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, allMeeti
   );
 
   const TaskRow = ({ t, showDate }) => (
-    <button onClick={() => openProject(t.projectId)} title="Open project" style={{
+    <button onClick={() => openProject(t.projectId, { tab: t.isLoose ? "tasks" : "work", focusId: t.id })} title="Go to this task" style={{
       display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "8px 10px", marginBottom: 6,
       background: "transparent", border: `1px solid ${T.line}`,
       borderRadius: 8, cursor: "pointer", fontFamily: "inherit", color: T.ink,
@@ -1486,7 +1558,7 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, allMeeti
   );
 
   const MeetingRow = ({ m }) => (
-    <button onClick={() => openProject(m.projectId)} title="Open project" style={{
+    <button onClick={() => openProject(m.projectId, { tab: "meetings", focusId: m.id })} title="Go to this meeting" style={{
       display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "8px 10px", marginBottom: 6,
       background: dark ? "#2A211B" : "#F6EAE2", border: `1px solid ${T.accent}`,
       borderRadius: 8, cursor: "pointer", fontFamily: "inherit", color: T.ink,
@@ -1604,7 +1676,7 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, allMeeti
 }
 
 // ---------- Finance section (per project) ----------
-function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, deletePayment, savePayment, markPaid, rejectPaymentReport, reorderPayments, inputStyle, primaryBtn, iconBtn, pillBase }) {
+function FinanceSection({ T, dark, dangerColor, todayStr, finance, financeActivity = [], addPayment, deletePayment, savePayment, markPaid, rejectPaymentReport, reorderPayments, inputStyle, primaryBtn, iconBtn, pillBase }) {
   const [filter, setFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
   const [payingId, setPayingId] = useState(null); // item being marked paid (method picker open)
@@ -1654,6 +1726,10 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
 
   return (
     <div style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 16, margin: 0, fontWeight: 700, letterSpacing: "-0.01em" }}>Finance</h2>
+        <button onClick={() => setShowAdd(v => !v)} style={{ ...primaryBtn, minWidth: 118, textAlign: "center" }}>{showAdd ? "Close" : "+ Add Payment"}</button>
+      </div>
       {/* Summary cards — all three always render, fixed structure, so every project's Finance tab looks identical */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
         <div style={summaryCard}>
@@ -1702,12 +1778,10 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
             color: filter === k ? T.accent : T.inkSoft, background: filter === k ? T.accentSoft : "transparent",
           }}>{label}</button>
         ))}
-        <div style={{ flex: 1 }} />
-        <button onClick={() => setShowAdd(v => !v)} style={primaryBtn}>{showAdd ? "Close" : "+ Add payment"}</button>
       </div>
 
       {showAdd && (
-        <PaymentForm onSubmit={(item) => { addPayment(item); setShowAdd(false); }} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />
+        <PaymentForm onSubmit={(item) => { addPayment(item); setShowAdd(false); }} onCancel={() => setShowAdd(false)} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />
       )}
 
       {/* Payment list */}
@@ -1727,9 +1801,9 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
                   Client reported this payment on {fmtDate(f.clientReportedAt)}{f.clientMethod ? ` via ${f.clientMethod}` : ""} — verify it was received
                 </span>
                 <button onClick={() => markPaid(f.id, f.clientMethod || PAY_METHODS[0])}
-                  style={{ ...primaryBtn, padding: "6px 12px", fontSize: 11.5 }}>Confirm received</button>
+                  style={{ ...primaryBtn, padding: "6px 12px", fontSize: 11.5 }}>Confirm Received</button>
                 <button onClick={() => rejectPaymentReport(f.id)} title="Clears the report; the item stays pending for the client"
-                  style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent" }}>Not received</button>
+                  style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent" }}>Not Received</button>
               </div>
             )}
             {editId === f.id ? (
@@ -1780,7 +1854,7 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
                     <button onClick={() => setPayingId(null)} style={{ ...iconBtn, fontSize: 11.5 }}>Cancel</button>
                   </span>
                 ) : (
-                  <button onClick={() => setPayingId(f.id)} style={{ ...pillBase, border: `1px solid ${T.accent}`, color: T.accent, background: "transparent" }}>Mark paid</button>
+                  <button onClick={() => setPayingId(f.id)} style={{ ...pillBase, border: `1px solid ${T.accent}`, color: T.accent, background: "transparent" }}>Mark Paid</button>
                 ))}
 
                 {confirmDel === f.id ? (
@@ -1798,6 +1872,23 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, addPayment, d
             )}
           </div>
         )} />
+      </section>
+
+      {/* Finance activity log — admin-only audit trail of every payment action */}
+      <section style={{ marginTop: 18 }}>
+        <h3 style={{ fontSize: 13, fontWeight: 700, color: T.inkSoft, letterSpacing: 0.3, textTransform: "uppercase", margin: "0 0 10px" }}>Activity log</h3>
+        {financeActivity.length === 0 ? (
+          <div style={{ fontSize: 12, color: T.inkSoft, opacity: 0.7 }}>No finance activity yet. Actions like creating, confirming, or deleting a payment will appear here.</div>
+        ) : (
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 16px" }}>
+            {financeActivity.map(e => (
+              <div key={e.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "9px 0", borderTop: `1px solid ${T.line}`, fontSize: 12.5 }}>
+                <span style={{ color: T.ink, minWidth: 0 }}>{e.text}</span>
+                <span style={{ color: T.inkSoft, fontSize: 11, whiteSpace: "nowrap", flexShrink: 0 }} title={new Date(e.at).toLocaleString("pt-BR")}>{fmtDateTime(e.at)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
@@ -1835,7 +1926,7 @@ function PaymentForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn })
       {category === "ugc" && captioned("Content delivered on",
         <input type="date" value={deliveredAt} onChange={e => setDeliveredAt(e.target.value)} style={{ ...inputStyle }} />)}
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (visible to client)" style={{ ...inputStyle, flex: "2 1 180px" }} />
-      <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add payment"}</button>
+      <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add Payment"}</button>
       {onCancel && <button onClick={onCancel} style={{ border: "none", background: "transparent", color: T.inkSoft, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5, padding: "8px 6px" }}>Cancel</button>}
     </div>
   );
@@ -1920,6 +2011,10 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
 
   return (
     <div style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 16, margin: 0, fontWeight: 700, letterSpacing: "-0.01em" }}>Accesses</h2>
+        <button onClick={() => setShowAdd(v => !v)} style={{ ...primaryBtn, minWidth: 118, textAlign: "center" }}>{showAdd ? "Close" : "+ Add Access"}</button>
+      </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         {[["all", "All"], ...Object.entries(ACCESS_CATEGORIES)].map(([k, label]) => (
           <button key={k} onClick={() => setFilter(k)} style={{
@@ -1927,11 +2022,9 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
             color: filter === k ? T.accent : T.inkSoft, background: filter === k ? T.accentSoft : "transparent",
           }}>{label}</button>
         ))}
-        <div style={{ flex: 1 }} />
-        <button onClick={() => setShowAdd(v => !v)} style={primaryBtn}>{showAdd ? "Close" : "+ Add access"}</button>
       </div>
 
-      {showAdd && <AccessForm onSubmit={(item) => { addAccess(item); setShowAdd(false); }} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />}
+      {showAdd && <AccessForm onSubmit={(item) => { addAccess(item); setShowAdd(false); }} onCancel={() => setShowAdd(false)} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />}
 
       <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
         {visible.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No accesses in this view.</div>}
@@ -2010,7 +2103,7 @@ function AccessForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
       <input value={password} onChange={e => setPassword(e.target.value)} placeholder={initial?.hasPassword ? "Leave blank to keep current" : "Password"} style={{ ...inputStyle, flex: "1 1 130px" }} />
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL" style={{ ...inputStyle, flex: "1 1 160px" }} />
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note" style={{ ...inputStyle, flex: "2 1 160px" }} />
-      <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add access"}</button>
+      <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add Access"}</button>
       {onCancel && <button onClick={onCancel} style={{ border: "none", background: "transparent", color: T.inkSoft, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>Cancel</button>}
     </div>
   );
@@ -2023,9 +2116,9 @@ function AccessForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
 // ---------- Loose Tasks section (per project) ----------
 // One-off tasks that don't belong to a stage. Same controls as stage tasks
 // (status, urgency, recurrence, client-visible, due date, note) but flat — no stage.
-function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, addLooseTask, cycleLooseStatus, cycleLooseUrgency, cycleLooseRecurrence, toggleLooseVis, saveLooseTask, deleteLooseTask, reorderLooseTasks, STATUS, URGENCY, inputStyle, primaryBtn, iconBtn, pillBase }) {
+function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, addLooseTask, cycleLooseStatus, cycleLooseUrgency, cycleLooseRecurrence, toggleLooseVis, saveLooseTask, deleteLooseTask, reorderLooseTasks, STATUS, URGENCY, inputStyle, primaryBtn, iconBtn, pillBase }) {
   const isMobile = useIsMobile();
-  const [newTitle, setNewTitle] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [filter, setFilter] = useState("active"); // active | all | completed
 
@@ -2033,10 +2126,13 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, addLooseTask
   const visible = tasks.filter(matches);
   const canReorder = filter === "all" && !editId;
 
-  const add = () => { addLooseTask(newTitle); setNewTitle(""); };
 
   return (
     <div style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 16, margin: 0, fontWeight: 700, letterSpacing: "-0.01em" }}>Tasks</h2>
+        <button onClick={() => setShowAdd(v => !v)} style={{ ...primaryBtn, minWidth: 118, textAlign: "center" }}>{showAdd ? "Close" : "+ Add Task"}</button>
+      </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
         <p style={{ fontSize: 12, color: T.inkSoft, margin: 0, maxWidth: 540 }}>
           One-off tasks that don't belong to a stage — like a request that came out of a meeting. Mark a task visible and the client sees it's in progress.
@@ -2051,13 +2147,12 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, addLooseTask
         </div>
       </div>
 
-      {/* Add box */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <input value={newTitle} onChange={e => setNewTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && add()}
-          placeholder="Add a task and press Enter (e.g. Find a UGC creator)"
-          style={{ ...inputStyle, flex: 1 }} />
-        <button onClick={add} style={primaryBtn}>Add</button>
-      </div>
+      {showAdd && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 14, marginBottom: 14, display: "flex" }}>
+          <TaskForm onSave={(item) => { addLooseTask(item); setShowAdd(false); }} onCancel={() => setShowAdd(false)} submitLabel="Add Task"
+            T={T} STATUS={STATUS} URGENCY={URGENCY} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
+        </div>
+      )}
 
       <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
         {visible.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>
@@ -2065,12 +2160,9 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, addLooseTask
         </div>}
         <SortableList items={visible} disabled={!canReorder} onReorder={(ids) => reorderLooseTasks(ids)}
           renderItem={(t, { handleProps }) => (
-          <div key={t.id} style={{
-            display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 10, padding: "9px 0", flexWrap: "wrap",
-            flexDirection: isMobile ? "column" : "row", borderTop: `1px solid ${T.line}`,
-          }}>
+          <LooseTaskRow key={t.id} t={t} focusId={focusId} T={T} isMobile={isMobile}>
             {editId === t.id ? (
-              <TaskEditForm task={t} onSave={(title, note, due, rec) => { saveLooseTask(t.id, title, note, due, rec); setEditId(null); }} onCancel={() => setEditId(null)} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} />
+              <TaskForm task={t} onSave={(patch) => { saveLooseTask(t.id, patch); setEditId(null); }} onCancel={() => setEditId(null)} T={T} STATUS={STATUS} URGENCY={URGENCY} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
             ) : (
               <>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, width: isMobile ? "100%" : "auto", flex: isMobile ? "none" : 1, minWidth: 0 }}>
@@ -2117,14 +2209,28 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, addLooseTask
                 </div>
               </>
             )}
-          </div>
+          </LooseTaskRow>
         )} />
       </section>
     </div>
   );
 }
 
-function MeetingsSection({ T, dark, dangerColor, meetings, addMeeting, saveMeeting, deleteMeeting, inputStyle, primaryBtn, iconBtn, pillBase, ghostBtn }) {
+// Row wrapper so a task arrived at from the calendar can scroll itself into
+// view and flash a highlight ring.
+function LooseTaskRow({ t, focusId, T, isMobile, children }) {
+  const [ref, isFocused] = useFocusRow(t.id, focusId);
+  return (
+    <div ref={ref} style={{
+      display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 10, padding: "9px 0", flexWrap: "wrap",
+      flexDirection: isMobile ? "column" : "row", borderTop: `1px solid ${T.line}`,
+      boxShadow: isFocused ? `0 0 0 2px ${T.accent}` : "none",
+      borderRadius: isFocused ? 8 : 0, transition: "box-shadow .3s ease",
+    }}>{children}</div>
+  );
+}
+
+function MeetingsSection({ T, dark, dangerColor, meetings, focusId, addMeeting, saveMeeting, deleteMeeting, inputStyle, primaryBtn, iconBtn, pillBase, ghostBtn }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
@@ -2135,19 +2241,24 @@ function MeetingsSection({ T, dark, dangerColor, meetings, addMeeting, saveMeeti
 
   return (
     <div style={{ marginTop: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
-        <p style={{ fontSize: 12, color: T.inkSoft, margin: 0, maxWidth: 560 }}>
-          A log of meetings for this project — agenda, links shared, and private notes. Agenda and links are visible to the client when the meeting is marked visible; notes are always internal.
-        </p>
-        <button onClick={() => setShowAdd(v => !v)} style={primaryBtn}>{showAdd ? "Close" : "+ Add meeting"}</button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 16, margin: 0, fontWeight: 700, letterSpacing: "-0.01em" }}>Meetings</h2>
+        <button onClick={() => setShowAdd(v => !v)} style={{ ...primaryBtn, minWidth: 118, textAlign: "center" }}>{showAdd ? "Close" : "+ Add Meeting"}</button>
       </div>
+      <p style={{ fontSize: 12, color: T.inkSoft, margin: "0 0 14px", maxWidth: 560 }}>
+        A log of meetings for this project — agenda, links shared, and private notes. Agenda and links are visible to the client when the meeting is marked visible; notes are always internal.
+      </p>
 
       {showAdd && <MeetingForm onSubmit={(m) => { addMeeting(m); setShowAdd(false); }} onCancel={() => setShowAdd(false)} T={T} dark={dark} inputStyle={inputStyle} primaryBtn={primaryBtn} pillBase={pillBase} />}
 
       <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
         {ordered.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No meetings logged yet.</div>}
         {ordered.map(m => (
-          <div key={m.id} style={{ padding: "14px 0", borderBottom: `1px solid ${T.line}` }}>
+          <div key={m.id}
+            ref={focusId === m.id ? (el) => { if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); } : undefined}
+            style={{ padding: "14px 0", borderBottom: `1px solid ${T.line}`,
+              boxShadow: focusId === m.id ? `0 0 0 2px ${T.accent}` : "none",
+              borderRadius: focusId === m.id ? 8 : 0, transition: "box-shadow .3s ease" }}>
             {editId === m.id ? (
               <MeetingForm initial={m} onSubmit={(patch) => { saveMeeting(m.id, patch); setEditId(null); }} onCancel={() => setEditId(null)} T={T} dark={dark} inputStyle={inputStyle} primaryBtn={primaryBtn} pillBase={pillBase} />
             ) : (
@@ -2239,7 +2350,7 @@ function MeetingForm({ initial, onSubmit, onCancel, T, dark, inputStyle, primary
           {clientVisible ? "Client sees this meeting" : "Internal only"}
         </button>
         <div style={{ flex: 1 }} />
-        <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add meeting"}</button>
+        <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add Meeting"}</button>
         {onCancel && <button onClick={onCancel} style={{ border: "none", background: "transparent", color: T.inkSoft, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>Cancel</button>}
       </div>
     </div>
@@ -2318,13 +2429,13 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
     <main style={{ flex: 1, padding: isMobile ? "18px 14px" : "30px 36px", maxWidth: 980, minWidth: 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 6, flexWrap: "wrap", gap: 12 }}>
         <h1 style={{ fontSize: 28, margin: 0, fontWeight: 700, letterSpacing: "-0.015em" }}>Clients</h1>
-        <button onClick={() => setShowAdd(v => !v)} style={primaryBtn}>{showAdd ? "Close" : "+ Add client"}</button>
+        <button onClick={() => setShowAdd(v => !v)} style={{ ...primaryBtn, minWidth: 118, textAlign: "center" }}>{showAdd ? "Close" : "+ Add Client"}</button>
       </div>
       <p style={{ fontSize: 12, color: T.inkSoft, margin: "0 0 18px" }}>
         Manage who can sign in to the client portal. "Invite to portal" creates their login and emails them a branded setup link.
       </p>
 
-      {showAdd && <ClientForm onSubmit={async (c) => { setShowAdd(false); try { await db.createClient(c); reloadClients(); } catch (e) { console.error(e); } }} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />}
+      {showAdd && <ClientForm onSubmit={async (c) => { setShowAdd(false); try { await db.createClient(c); reloadClients(); } catch (e) { console.error(e); } }} onCancel={() => setShowAdd(false)} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />}
 
       <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
         {clients.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No clients yet.</div>}
@@ -2430,7 +2541,7 @@ function ClientForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
       <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Client name *" style={{ ...inputStyle, flex: "1 1 160px" }} />
       <input value={company} onChange={e => setCompany(e.target.value)} placeholder="Company (matches project client)" style={{ ...inputStyle, flex: "1 1 180px" }} />
       <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email *" style={{ ...inputStyle, flex: "1 1 180px" }} />
-      <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add client"}</button>
+      <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add Client"}</button>
       {onCancel && <button onClick={onCancel} style={{ border: "none", background: "transparent", color: T.inkSoft, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>Cancel</button>}
     </div>
   );
@@ -2807,26 +2918,45 @@ function StageEditForm({ stage, onSave, onCancel, inputStyle, primaryBtn, iconBt
   );
 }
 
-function TaskEditForm({ task, onSave, onCancel, inputStyle, primaryBtn, iconBtn }) {
-  const [title, setTitle] = useState(task.title);
-  const [note, setNote] = useState(task.note);
-  const [due, setDue] = useState(task.dueDate || "");
-  const [rec, setRec] = useState(task.recurrence || "none");
-  const save = () => onSave(title, note, due, rec);
+// One form for creating AND editing a task, in stages or in the Tasks tab.
+// Every field a task can have is available at creation time — no more
+// "create with a title, then set everything else on the row".
+function TaskForm({ task, onSave, onCancel, submitLabel = "Save", T, STATUS, URGENCY, inputStyle, primaryBtn, iconBtn, pillBase }) {
+  const [title, setTitle] = useState(task?.title || "");
+  const [note, setNote] = useState(task?.note || "");
+  const [due, setDue] = useState(task?.dueDate || "");
+  const [rec, setRec] = useState(task?.recurrence || "none");
+  const [urgency, setUrgency] = useState(task?.urgency || "none");
+  const [status, setStatus] = useState(task?.status || "todo");
+  const [clientVisible, setClientVisible] = useState(task?.clientVisible ?? true);
+  const save = () => {
+    if (!title.trim()) return;
+    onSave({ title: title.trim(), note: note.trim(), dueDate: due || null, recurrence: rec, urgency, status, clientVisible });
+  };
+  const keys = (e) => { if (e.key === "Enter") save(); if (e.key === "Escape") onCancel(); };
   return (
-    <div style={{ display: "flex", gap: 8, flex: 1, flexWrap: "wrap" }}>
-      <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") onCancel(); }}
+    <div style={{ display: "flex", gap: 8, flex: 1, flexWrap: "wrap", alignItems: "center" }}>
+      <input autoFocus value={title} onChange={e => setTitle(e.target.value)} onKeyDown={keys}
         placeholder="Task title" style={{ ...inputStyle, flex: 2, minWidth: 160 }} />
-      <input value={note} onChange={e => setNote(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") onCancel(); }}
+      <input value={note} onChange={e => setNote(e.target.value)} onKeyDown={keys}
         placeholder="Note (optional — clients see this)" style={{ ...inputStyle, flex: 2, minWidth: 160 }} />
       <input type="date" value={due} onChange={e => setDue(e.target.value)} title="Due date / first occurrence"
         style={{ ...inputStyle, minWidth: 130 }} />
       <select value={rec} onChange={e => setRec(e.target.value)} title="Recurrence" style={{ ...inputStyle, minWidth: 100 }}>
         {Object.entries(RECURRENCE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
       </select>
-      <button onClick={save} style={{ ...primaryBtn, padding: "7px 13px", fontSize: 12 }}>Save</button>
+      <select value={urgency} onChange={e => setUrgency(e.target.value)} title="Urgency" style={{ ...inputStyle, minWidth: 100 }}>
+        {Object.entries(URGENCY).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+      </select>
+      <select value={status} onChange={e => setStatus(e.target.value)} title="Status" style={{ ...inputStyle, minWidth: 100 }}>
+        {Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+      </select>
+      <button onClick={() => setClientVisible(v => !v)} title={clientVisible ? "Visible to client" : "Internal only"}
+        style={{ ...pillBase, border: `1px solid ${clientVisible ? T.accent : T.line}`, color: clientVisible ? T.accent : T.inkSoft, background: clientVisible ? T.accentSoft : "transparent", padding: "6px 12px" }}>
+        {clientVisible ? "Client sees this" : "Internal"}
+      </button>
+      <div style={{ flex: 1 }} />
+      <button onClick={save} style={{ ...primaryBtn, padding: "7px 13px", fontSize: 12 }}>{submitLabel}</button>
       <button onClick={onCancel} style={{ ...iconBtn, fontSize: 12 }}>Cancel</button>
     </div>
   );
