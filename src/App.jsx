@@ -1197,7 +1197,7 @@ export default function App({ mode = "admin" }) {
           )}
 
           {/* Tab switcher — drag a tab to reorder; order is remembered per device */}
-          <div style={{ display: "flex", gap: 4, margin: "18px 0 0", borderBottom: `1px solid ${T.line}`, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: isMobile ? 8 : 4, margin: "18px 0 0", borderBottom: `1px solid ${T.line}`, flexWrap: "wrap" }}>
             <SortableTabs
               items={tabOrder.map(k => ({ key: k, label: TAB_DEFS[k] }))}
               onReorder={reorderTabs}
@@ -1333,8 +1333,7 @@ export default function App({ mode = "admin" }) {
                 <div key={t.id}
                   ref={focusId === t.id ? (el) => { if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); } : undefined}
                   style={{
-                    display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 10, padding: "9px 0", flexWrap: "wrap", minHeight: isMobile ? 0 : 64,
-                    flexDirection: isMobile ? "column" : "row",
+                    display: "flex", flexDirection: "column", alignItems: "stretch", gap: 8, padding: "12px 0",
                     borderTop: `2px solid ${T.line}`,
                     boxShadow: focusId === t.id ? `0 0 0 2px ${T.accent}` : "none",
                     borderRadius: focusId === t.id ? 8 : 0, transition: "box-shadow .3s ease",
@@ -1348,7 +1347,7 @@ export default function App({ mode = "admin" }) {
                     </div>
                   ) : (
                     <>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, width: isMobile ? "100%" : "auto", flex: isMobile ? "none" : 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, width: "100%", minWidth: 0 }}>
                         <span {...handleProps} title={taskView === "all" ? "Drag to reorder" : "Switch to All view to reorder"}
                           style={{ ...(taskView === "all" ? handleProps.style : {}), color: T.inkSoft, userSelect: "none", display: "flex", flexShrink: 0, opacity: taskView === "all" ? 1 : 0.3 }}>
                           <Icon name="grip" size={14} />
@@ -1381,9 +1380,7 @@ export default function App({ mode = "admin" }) {
                           </div>
                         </div>
                       </div>
-                      <div style={isMobile
-                        ? { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6, width: "100%", marginTop: 6 }
-                        : { display: "contents" }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, width: "100%", paddingLeft: 24 }}>
                       {t.target != null && (
                         <span title="Acquisition counter" style={{ ...pillBase, cursor: "default", border: `1px solid ${(t.count || 0) >= t.target ? T.accent : T.line}`, color: (t.count || 0) >= t.target ? T.accent : T.inkSoft, background: (t.count || 0) >= t.target ? T.accentSoft : "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
                           <button onClick={() => incCount(s.id, t.id, -1)} title="Decrease" style={{ border: "none", background: "transparent", color: "inherit", cursor: "pointer", padding: 0, fontSize: 13, fontWeight: 800, lineHeight: 1, fontFamily: "inherit" }}>-</button>
@@ -1392,23 +1389,23 @@ export default function App({ mode = "admin" }) {
                         </span>
                       )}
                       <button onClick={() => cycleRecurrence(s.id, t.id)} title={t.recurrence !== "none" ? `Repeats ${RECURRENCE[t.recurrence || "none"].toLowerCase()} — click to change` : "One-time task — click to make it recurring"}
-                        style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                        style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "6px 11px" }}>
                         <Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence || "none"]}
                       </button>
                       <button onClick={() => cycleUrgency(s.id, t.id)} title="Click to cycle urgency"
-                        style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                        style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: "6px 11px" }}>
                         {URGENCY[t.urgency].label}
                       </button>
                       <button onClick={() => cycleStatus(s.id, t.id)} title="Click to cycle status"
-                        style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                        style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: "6px 11px" }}>
                         {STATUS[t.status].label}
                       </button>
                       <button onClick={() => toggleVis(s.id, t.id)} title={t.clientVisible ? "Visible to client" : "Internal only"}
-                        style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                        style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: "6px 11px" }}>
                         {t.clientVisible ? "Client sees this" : "Internal"}
                       </button>
-                      <button onClick={() => setEditingTask(t.id)} style={isMobile ? { ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 10px" } : iconBtn} title="Edit task"><Icon name="edit" size={12} />{isMobile && <span>Edit</span>}</button>
-                      <button onClick={() => deleteTask(s.id, t.id)} style={isMobile ? { ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 10px" } : { ...iconBtn, color: dangerColor }} title="Delete task"><Icon name="x" size={13} />{isMobile && <span>Delete</span>}</button>
+                      <button onClick={() => setEditingTask(t.id)} style={{ ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px" }} title="Edit task"><Icon name="edit" size={12} />Edit</button>
+                      <button onClick={() => deleteTask(s.id, t.id)} style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px" }} title="Delete task"><Icon name="x" size={13} />Delete</button>
                       </div>
                       {t.guide && expandedGuide === t.id && (
                         <div style={{
@@ -1771,7 +1768,7 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, financeActivi
       </div>
 
       {/* Filters + add */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
         {[["all", "All"], ["overdue", "Overdue"], ...Object.entries(FIN_CATEGORIES)].map(([k, label]) => (
           <button key={k} onClick={() => setFilter(k)} style={{
             ...pillBase, border: `1px solid ${filter === k ? T.accent : T.line}`,
@@ -1809,14 +1806,15 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, financeActivi
             {editId === f.id ? (
               <PaymentForm initial={f} onSubmit={(patch) => { savePayment(f.id, patch); setEditId(null); }} onCancel={() => setEditId(null)} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />
             ) : (
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", minHeight: 56 }}>
+              <div style={{ display: "flex", alignItems: isMobile ? "stretch" : "center", gap: isMobile ? 10 : 12, flexWrap: "wrap", minHeight: 56, flexDirection: isMobile ? "column" : "row" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, width: isMobile ? "100%" : "auto", flex: isMobile ? "none" : 1, minWidth: 0 }}>
                 {canReorder && (
                   <span {...handleProps} title="Drag to reorder" style={{ ...handleProps.style, color: T.inkSoft, display: "flex", flexShrink: 0, userSelect: "none" }}>
                     <Icon name="grip" size={14} />
                   </span>
                 )}
-                <div style={{ width: 4, alignSelf: "stretch", borderRadius: 2, background: catColor(f) }} />
-                <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ width: 4, alignSelf: "stretch", borderRadius: 2, background: catColor(f), flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 600, textDecoration: f.status === "paid" ? "line-through" : "none", color: f.status === "paid" ? T.inkSoft : T.ink }}>
                     {f.title}
                   </div>
@@ -1832,8 +1830,12 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, financeActivi
                   </div>
                   <div style={{ fontSize: 11, color: T.inkSoft, marginTop: 3, minHeight: 15 }}>{f.note || "\u00a0"}</div>
                 </div>
-                <div style={{ fontSize: 15, fontWeight: 700, whiteSpace: "nowrap" }}>{fmtBRL(f.amount)}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, whiteSpace: "nowrap", marginLeft: "auto" }}>{fmtBRL(f.amount)}</div>
+                </div>
 
+                <div style={isMobile
+                  ? { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, width: "100%" }
+                  : { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => {
                   const keys = Object.keys(FIN_RECUR);
                   const next = keys[(keys.indexOf(f.recurrence || "none") + 1) % keys.length];
@@ -1864,10 +1866,11 @@ function FinanceSection({ T, dark, dangerColor, todayStr, finance, financeActivi
                   </span>
                 ) : (
                   <>
-                    <button onClick={() => setEditId(f.id)} style={iconBtn} title="Edit payment"><Icon name="edit" size={12} /></button>
-                    <button onClick={() => setConfirmDel(f.id)} style={{ ...iconBtn, color: dangerColor }} title="Delete payment"><Icon name="x" size={13} /></button>
+                    <button onClick={() => setEditId(f.id)} style={isMobile ? { ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "9px 10px" } : iconBtn} title="Edit payment"><Icon name="edit" size={12} />{isMobile && <span>Edit</span>}</button>
+                    <button onClick={() => setConfirmDel(f.id)} style={isMobile ? { ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "9px 10px" } : { ...iconBtn, color: dangerColor }} title="Delete payment"><Icon name="x" size={13} />{isMobile && <span>Delete</span>}</button>
                   </>
                 )}
+                </div>
               </div>
             )}
           </div>
@@ -2015,7 +2018,7 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
         <h2 style={{ fontSize: 16, margin: 0, fontWeight: 700, letterSpacing: "-0.01em" }}>Accesses</h2>
         <button onClick={() => setShowAdd(v => !v)} style={{ ...primaryBtn, minWidth: 118, textAlign: "center" }}>{showAdd ? "Close" : "+ Add Access"}</button>
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
         {[["all", "All"], ...Object.entries(ACCESS_CATEGORIES)].map(([k, label]) => (
           <button key={k} onClick={() => setFilter(k)} style={{
             ...pillBase, border: `1px solid ${filter === k ? T.accent : T.line}`,
@@ -2038,13 +2041,14 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
             {editId === a.id ? (
               <AccessForm initial={a} onSubmit={(patch) => { saveAccess(a.id, patch); setEditId(null); }} onCancel={() => setEditId(null)} T={T} inputStyle={inputStyle} primaryBtn={primaryBtn} />
             ) : (
-              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: isMobile ? "stretch" : "flex-start", gap: isMobile ? 10 : 12, flexWrap: "wrap", flexDirection: isMobile ? "column" : "row" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, width: isMobile ? "100%" : "auto", flex: isMobile ? "none" : 1, minWidth: 0 }}>
                 {canReorder && (
-                  <span {...handleProps} title="Drag to reorder" style={{ ...handleProps.style, color: T.inkSoft, display: "flex", paddingTop: 2, userSelect: "none" }}>
+                  <span {...handleProps} title="Drag to reorder" style={{ ...handleProps.style, color: T.inkSoft, display: "flex", paddingTop: 2, userSelect: "none", flexShrink: 0 }}>
                     <Icon name="grip" size={14} />
                   </span>
                 )}
-                <div style={{ flex: 1, minWidth: 240 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
                     <span style={{ fontSize: 13.5, fontWeight: 600 }}>{a.label}</span>
                     <span style={{ ...pillBase, cursor: "default", border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", fontSize: 10 }}>{ACCESS_CATEGORIES[a.category]}</span>
@@ -2057,17 +2061,20 @@ function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, 
                     <span style={{ fontSize: 11.5, color: T.inkSoft, minHeight: 22, display: "inline-flex", alignItems: "center" }}>{a.note || "\u00a0"}</span>
                   </div>
                 </div>
+                </div>
+                <div style={isMobile ? { display: "flex", gap: 8, width: "100%" } : { display: "inline-flex", gap: 6, flexShrink: 0 }}>
                 {confirmDel === a.id ? (
-                  <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <button onClick={() => { deleteAccess(a.id); setConfirmDel(null); }} style={{ ...pillBase, border: "none", background: dangerColor, color: dark ? "#0D0F13" : "#fff" }}>Delete</button>
-                    <button onClick={() => setConfirmDel(null)} style={{ ...iconBtn, fontSize: 11.5 }}>Cancel</button>
-                  </span>
+                  <>
+                    <button onClick={() => { deleteAccess(a.id); setConfirmDel(null); }} style={{ ...pillBase, border: "none", background: dangerColor, color: dark ? "#0D0F13" : "#fff", padding: isMobile ? "9px 14px" : "3px 10px", flex: isMobile ? 1 : "none" }}>Delete</button>
+                    <button onClick={() => setConfirmDel(null)} style={{ ...iconBtn, fontSize: 11.5, padding: isMobile ? "9px 14px" : "6px 8px", flex: isMobile ? 1 : "none" }}>Cancel</button>
+                  </>
                 ) : (
-                  <span style={{ display: "inline-flex", gap: 2 }}>
-                    <button onClick={() => setEditId(a.id)} style={iconBtn} title="Edit access"><Icon name="edit" size={12} /></button>
-                    <button onClick={() => setConfirmDel(a.id)} style={{ ...iconBtn, color: dangerColor }} title="Delete access"><Icon name="x" size={13} /></button>
-                  </span>
+                  <>
+                    <button onClick={() => setEditId(a.id)} style={isMobile ? { ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "9px 14px", flex: 1 } : iconBtn} title="Edit access"><Icon name="edit" size={12} />{isMobile && <span>Edit</span>}</button>
+                    <button onClick={() => setConfirmDel(a.id)} style={isMobile ? { ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "9px 14px", flex: 1 } : { ...iconBtn, color: dangerColor }} title="Delete access"><Icon name="x" size={13} />{isMobile && <span>Delete</span>}</button>
+                  </>
                 )}
+                </div>
               </div>
             )}
           </div>
@@ -2165,7 +2172,7 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, add
               <TaskForm task={t} onSave={(patch) => { saveLooseTask(t.id, patch); setEditId(null); }} onCancel={() => setEditId(null)} T={T} STATUS={STATUS} URGENCY={URGENCY} inputStyle={inputStyle} primaryBtn={primaryBtn} iconBtn={iconBtn} pillBase={pillBase} />
             ) : (
               <>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, width: isMobile ? "100%" : "auto", flex: isMobile ? "none" : 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, width: "100%", minWidth: 0 }}>
                   <span {...(canReorder ? handleProps : {})} title={canReorder ? "Drag to reorder" : "Switch to All view to reorder"}
                     style={{ ...(canReorder ? handleProps.style : {}), color: T.inkSoft, display: "flex", flexShrink: 0, opacity: canReorder ? 1 : 0.3 }}>
                     <Icon name="grip" size={14} />
@@ -2187,25 +2194,25 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, add
                     </div>
                   </div>
                 </div>
-                <div style={isMobile ? { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6, width: "100%", marginTop: 6 } : { display: "contents" }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, width: "100%", paddingLeft: 24 }}>
                   <button onClick={() => cycleLooseRecurrence(t.id)} title="Click to cycle recurrence"
-                    style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                    style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "6px 11px" }}>
                     <Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence || "none"]}
                   </button>
                   <button onClick={() => cycleLooseUrgency(t.id)} title="Click to cycle urgency"
-                    style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                    style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: "6px 11px" }}>
                     {URGENCY[t.urgency].label}
                   </button>
                   <button onClick={() => cycleLooseStatus(t.id)} title="Click to cycle status"
-                    style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                    style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: "6px 11px" }}>
                     {STATUS[t.status].label}
                   </button>
                   <button onClick={() => toggleLooseVis(t.id)} title={t.clientVisible ? "Visible to client" : "Internal only"}
-                    style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: isMobile ? "8px 10px" : "3px 10px" }}>
+                    style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: "6px 11px" }}>
                     {t.clientVisible ? "Client sees this" : "Internal"}
                   </button>
-                  <button onClick={() => setEditId(t.id)} style={isMobile ? { ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 10px" } : iconBtn} title="Edit task"><Icon name="edit" size={12} />{isMobile && <span>Edit</span>}</button>
-                  <button onClick={() => deleteLooseTask(t.id)} style={isMobile ? { ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px 10px" } : { ...iconBtn, color: dangerColor }} title="Delete task"><Icon name="x" size={13} />{isMobile && <span>Delete</span>}</button>
+                  <button onClick={() => setEditId(t.id)} style={{ ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px" }} title="Edit task"><Icon name="edit" size={12} />Edit</button>
+                  <button onClick={() => deleteLooseTask(t.id)} style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px" }} title="Delete task"><Icon name="x" size={13} />Delete</button>
                 </div>
               </>
             )}
@@ -2222,8 +2229,8 @@ function LooseTaskRow({ t, focusId, T, isMobile, children }) {
   const [ref, isFocused] = useFocusRow(t.id, focusId);
   return (
     <div ref={ref} style={{
-      display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 10, padding: "9px 0", flexWrap: "wrap",
-      flexDirection: isMobile ? "column" : "row", borderTop: `1px solid ${T.line}`,
+      display: "flex", flexDirection: "column", alignItems: "stretch", gap: 8, padding: "12px 0",
+      borderTop: `1px solid ${T.line}`,
       boxShadow: isFocused ? `0 0 0 2px ${T.accent}` : "none",
       borderRadius: isFocused ? 8 : 0, transition: "box-shadow .3s ease",
     }}>{children}</div>
