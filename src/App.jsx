@@ -1715,6 +1715,7 @@ function CalendarOverview({ T, dark, dangerColor, todayStr, allPending, allMeeti
 
 // ---------- Finance section (per project) ----------
 function FinanceSection({ T, dark, dangerColor, todayStr, finance, financeActivity = [], addPayment, deletePayment, savePayment, markPaid, rejectPaymentReport, reorderPayments, inputStyle, primaryBtn, iconBtn, pillBase }) {
+  const isMobile = useIsMobile();
   const [filter, setFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
   const [payingId, setPayingId] = useState(null); // item being marked paid (method picker open)
@@ -1992,6 +1993,7 @@ function CopyButton({ value, T }) {
 }
 
 function AccessSection({ T, dark, dangerColor, accesses, addAccess, saveAccess, deleteAccess, reorderAccesses, inputStyle, primaryBtn, iconBtn, pillBase }) {
+  const isMobile = useIsMobile();
   const [filter, setFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
