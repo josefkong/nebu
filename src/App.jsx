@@ -2656,6 +2656,7 @@ function ClientForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
 // Internal tasks never render; progress is computed from client-visible tasks only.
 function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onReportPayment, onRequestTask, exitLabel = "Exit preview", projects, activeId, setActiveId }) {
   const isMobile = useIsMobile();
+  const inputStyle = { padding: "9px 12px", borderRadius: 8, border: `1px solid ${T.line}`, fontSize: 13, fontFamily: "inherit", background: T.panel, color: T.ink, outline: "none" };
   const [tab, setTab] = useState("progress"); // progress | payments
   const [reportingId, setReportingId] = useState(null); // payment being reported (method picker open)
   const [reportMethod, setReportMethod] = useState(PAY_METHODS[0]);
