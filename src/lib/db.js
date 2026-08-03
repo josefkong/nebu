@@ -30,7 +30,9 @@ export async function loadProjects() {
       accesses:accesses ( id, label, category, username, secret_id, url, note, position ),
       meetings:meetings ( id, title, meeting_date, meeting_time, agenda, links, client_visible, position, created_at ),
       looseTasks:project_tasks ( id, title, status, urgency, client_visible, note, created_at, completed_at, due_date, recurrence, last_done, position ),
-      activity:activity ( id, when_label, text, created_at )
+      activity:activity ( id, when_label, text, created_at ),
+      financeActivity:finance_activity ( id, text, created_at ),
+      taskRequests:task_requests ( id, title, description, status, admin_note, task_id, created_at, decided_at )
     `)
     .order("position", { ascending: true })
     .order("position", { foreignTable: "stages", ascending: true });
@@ -57,6 +59,14 @@ function dbProjectToUI(p) {
     accesses: (p.accesses || []).sort(byPos).map(dbAccessToUI),
     meetings: (p.meetings || []).sort(byPos).map(dbMeetingToUI),
     looseTasks: (p.looseTasks || []).sort(byPos).map(dbTaskToUI),
+    taskRequests: (p.taskRequests || [])
+      .slice()
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .map(r => ({ id: r.id, title: r.title, description: r.description || "", status: r.status, adminNote: r.admin_note || "", taskId: r.task_id || null, at: r.created_at, decidedAt: r.decided_at || null })),
+    financeActivity: (p.financeActivity || [])
+      .slice()
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .map(r => ({ id: r.id, text: r.text, at: r.created_at })),
     activity: (p.activity || [])
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
       .map((a) => ({ id: a.id, when: a.when_label, text: a.text })),
@@ -297,6 +307,40 @@ export const db = {
     const { error } = await supabase.from("project_tasks").delete().eq("id", id);
     if (error) throw error;
   },
+
+  // ---- Client task requests ----
+  // Client submits a request (RLS restricts this to their own projects + pending).
+  async createTaskRequest(projectId, title, description) {
+    const { data, error } = await supabase.from("task_requests")
+      .insert({ project_id: projectId, title, description: description || "", status: "pending" })
+      .select("id, title, description, status, admin_note, task_id, created_at, decided_at")
+      .single();
+    if (error) throw error;
+    return data;
+  },
+  // Admin accepts: spawn a client-visible loose task, then flag the request accepted.
+  async acceptTaskRequest(req, projectId, position) {
+    const { data: task, error: tErr } = await supabase.from("project_tasks")
+      .insert({
+        project_id: projectId, title: req.title, note: req.description || "",
+        status: "todo", urgency: "none", client_visible: true, position: position || 0,
+      })
+      .select("id, title, status, urgency, client_visible, note, created_at, completed_at, due_date, recurrence, last_done, position")
+      .single();
+    if (tErr) throw tErr;
+    const { error: rErr } = await supabase.from("task_requests")
+      .update({ status: "accepted", task_id: task.id, decided_at: new Date().toISOString() })
+      .eq("id", req.id);
+    if (rErr) throw rErr;
+    return task;
+  },
+  // Admin declines with an optional note.
+  async declineTaskRequest(id, note) {
+    const { error } = await supabase.from("task_requests")
+      .update({ status: "declined", admin_note: note || "", decided_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) throw error;
+  },
   // Admin-only: fetch private notes for a project's meetings. Returns { meetingId: notes }.
   // For a client this returns {} because RLS blocks the table (handled gracefully).
   async loadMeetingNotes(meetingIds) {
@@ -312,6 +356,15 @@ export const db = {
     const { error } = await supabase.from("activity")
       .insert({ project_id: projectId, when_label: whenLabel, text });
     if (error) throw error;
+  },
+
+  // Finance audit trail (admin-only). Fire-and-forget: a failed log line must
+  // never block the actual finance action.
+  async logFinance(projectId, text) {
+    if (!projectId || !text) return;
+    const { error } = await supabase.from("finance_activity")
+      .insert({ project_id: projectId, text });
+    if (error) console.error("logFinance failed:", error);
   },
 
   // Clients
@@ -500,6 +553,45 @@ export const notify = {
        <p>Verify it was received, then confirm it in the portal to close it out.</p>`,
     );
     return sendEmail(ADMIN_EMAIL, subject, html);
+  },
+
+  // Client submitted a task request → alert admin instantly (the "prompt me" need).
+  taskRequested(requestTitle, description, projectName, clientCompany) {
+    const subject = `New task request: ${requestTitle} (${clientCompany})`;
+    const html = emailShell(
+      "A client requested a task",
+      `<p><strong>${clientCompany}</strong> requested a task on <strong>${projectName}</strong>:</p>
+       <p style="background:#15181F;border:1px solid #23272F;border-radius:8px;padding:12px 14px;color:#ECEAE4;">
+         ${requestTitle}${description ? `<br><span style="color:#8B94A6;">${description}</span>` : ""}
+       </p>
+       <p>Review it in the Tasks tab (Requests filter) to accept or decline.</p>`,
+    );
+    return sendEmail(ADMIN_EMAIL, subject, html);
+  },
+
+  // Admin accepted a request → tell the client it's now a task.
+  requestAccepted(clientEmail, requestTitle, projectName) {
+    if (!clientEmail) { console.warn(`notify.requestAccepted: no client email for "${projectName}".`); return; }
+    const html = emailShell(
+      "Your request was accepted",
+      `<p>Good news — your request on <strong>${projectName}</strong> has been accepted and is now a task:</p>
+       <p style="background:#15181F;border:1px solid #23272F;border-radius:8px;padding:12px 14px;color:#ECEAE4;">${requestTitle}</p>
+       <p>You can follow its progress anytime in your portal.</p>`,
+    );
+    return sendEmail(clientEmail, `Request accepted: ${requestTitle}`, html);
+  },
+
+  // Admin declined a request → tell the client, with the optional note.
+  requestDeclined(clientEmail, requestTitle, projectName, note) {
+    if (!clientEmail) { console.warn(`notify.requestDeclined: no client email for "${projectName}".`); return; }
+    const html = emailShell(
+      "An update on your request",
+      `<p>Your request on <strong>${projectName}</strong> was reviewed:</p>
+       <p style="background:#15181F;border:1px solid #23272F;border-radius:8px;padding:12px 14px;color:#ECEAE4;">${requestTitle}</p>
+       ${note ? `<p style="color:#8B94A6;">${note}</p>` : ""}
+       <p>Feel free to reach out if you'd like to discuss it.</p>`,
+    );
+    return sendEmail(clientEmail, `Update on your request: ${requestTitle}`, html);
   },
 
   // Admin confirmed a payment was received → send the client a receipt.

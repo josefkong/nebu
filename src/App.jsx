@@ -466,7 +466,7 @@ export default function App({ mode = "admin" }) {
   const [expandedGuide, setExpandedGuide] = useState(null); // task id with its how-to guide open
   const [collapsedStages, setCollapsedStages] = useState({}); // stage id -> true when collapsed (view-only)
   const toggleStageCollapsed = (sid) => setCollapsedStages(c => ({ ...c, [sid]: !c[sid] }));
-  const [taskView, setTaskView] = useState("active"); // active | all | completed — workflow task filter
+  const [taskView, setTaskView] = useState("active"); // active | all | completed
   // A task counts as "completed" only if it actually finished (has completedAt).
   // Recurring tasks roll forward and never set completedAt, so they always read as active.
   const taskMatchesView = (t) => taskView === "all" ? true : taskView === "completed" ? !!t.completedAt : !t.completedAt;
@@ -708,6 +708,37 @@ export default function App({ mode = "admin" }) {
     const t = typeof item === "string" ? { title: item } : (item || {});
     if (!String(t.title || "").trim()) return;
     update(p => { (p.looseTasks = p.looseTasks || []).push(mkTask(t)); return p; });
+  };
+
+  // --- Client task-request triage (admin) ---
+  const acceptRequest = async (req) => {
+    const proj = project;
+    try {
+      const position = (proj?.looseTasks?.length || 0);
+      const task = await db.acceptTaskRequest(req, proj.id, position);
+      // Reflect immediately: add the new task, flip the request to accepted.
+      setProjects(ps => ps.map(p => p.id === proj.id ? {
+        ...p,
+        looseTasks: [...(p.looseTasks || []), {
+          id: task.id, title: task.title, note: task.note || "", status: "todo", urgency: "none",
+          clientVisible: true, createdAt: task.created_at, completedAt: null, dueDate: null, recurrence: "none",
+        }],
+        taskRequests: (p.taskRequests || []).map(r => r.id === req.id
+          ? { ...r, status: "accepted", taskId: task.id, decidedAt: new Date().toISOString() } : r),
+      } : p));
+      notify.requestAccepted(clientEmailForProject(proj), req.title, proj?.name || "");
+    } catch (e) { console.error("accept request failed", e); alert("Could not accept the request: " + (e.message || e)); }
+  };
+  const declineRequest = async (req, note) => {
+    const proj = project;
+    try {
+      await db.declineTaskRequest(req.id, note);
+      setProjects(ps => ps.map(p => p.id === proj.id ? {
+        ...p, taskRequests: (p.taskRequests || []).map(r => r.id === req.id
+          ? { ...r, status: "declined", adminNote: note || "", decidedAt: new Date().toISOString() } : r),
+      } : p));
+      notify.requestDeclined(clientEmailForProject(proj), req.title, proj?.name || "", note);
+    } catch (e) { console.error("decline request failed", e); alert("Could not decline the request: " + (e.message || e)); }
   };
   const cycleLooseStatus = (tid) => {
     const proj = project;
@@ -956,12 +987,21 @@ export default function App({ mode = "admin" }) {
           update(p => { const f = (p.finance || []).find(f => f.id === fid); if (f) { f.clientReportedAt = new Date().toISOString().slice(0,10); f.clientMethod = method; } return p; });
           // Alert the admin that this client reported a payment to verify.
           if (pay) notify.paymentReported(pay.title, pay.amount, method, project?.name || "", project?.client || "");
+        }}
+        onRequestTask={async (title, description) => {
+          try {
+            const row = await db.createTaskRequest(project.id, title, description);
+            setProjects(ps => ps.map(p => p.id === project.id
+              ? { ...p, taskRequests: [{ id: row.id, title: row.title, description: row.description || "", status: "pending", adminNote: "", taskId: null, at: row.created_at, decidedAt: null }, ...(p.taskRequests || [])] }
+              : p));
+            notify.taskRequested(title, description, project?.name || "", project?.client || "");
+          } catch (e) { console.error("request task failed", e); alert("Could not send your request. Please try again."); }
         }} />
     );
   }
 
   if (clientPreview && project) {
-    return <ClientPortal project={project} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr} onExit={() => setClientPreview(false)} onReportPayment={reportPaymentClient} />;
+    return <ClientPortal project={project} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr} onExit={() => setClientPreview(false)} onReportPayment={reportPaymentClient} onRequestTask={() => alert("This is a preview — in the live portal, this sends the request to you.")} />;
   }
 
   if (loadingData) return <CenterMsg>Loading…</CenterMsg>;
@@ -1220,6 +1260,7 @@ export default function App({ mode = "admin" }) {
           ) : projTab === "tasks" ? (
             <LooseTasksSection key={project.id} T={T} dark={dark} dangerColor={dangerColor} todayStr={todayStr}
               tasks={project.looseTasks || []} focusId={focusId}
+              taskRequests={project.taskRequests || []} acceptRequest={acceptRequest} declineRequest={declineRequest}
               addLooseTask={addLooseTask} cycleLooseStatus={cycleLooseStatus} cycleLooseUrgency={cycleLooseUrgency}
               cycleLooseRecurrence={cycleLooseRecurrence} toggleLooseVis={toggleLooseVis}
               saveLooseTask={saveLooseTask} deleteLooseTask={deleteLooseTask} reorderLooseTasks={reorderLooseTasks}
@@ -2123,7 +2164,7 @@ function AccessForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
 // ---------- Loose Tasks section (per project) ----------
 // One-off tasks that don't belong to a stage. Same controls as stage tasks
 // (status, urgency, recurrence, client-visible, due date, note) but flat — no stage.
-function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, addLooseTask, cycleLooseStatus, cycleLooseUrgency, cycleLooseRecurrence, toggleLooseVis, saveLooseTask, deleteLooseTask, reorderLooseTasks, STATUS, URGENCY, inputStyle, primaryBtn, iconBtn, pillBase }) {
+function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, taskRequests = [], acceptRequest, declineRequest, addLooseTask, cycleLooseStatus, cycleLooseUrgency, cycleLooseRecurrence, toggleLooseVis, saveLooseTask, deleteLooseTask, reorderLooseTasks, STATUS, URGENCY, inputStyle, primaryBtn, iconBtn, pillBase }) {
   const isMobile = useIsMobile();
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -2131,7 +2172,10 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, add
 
   const matches = (t) => filter === "all" ? true : filter === "completed" ? t.status === "done" : t.status !== "done";
   const visible = tasks.filter(matches);
-  const canReorder = filter === "all" && !editId;
+  const canReorder = filter === "all" && !editId && filter !== "requests";
+  const pendingRequests = taskRequests.filter(r => r.status === "pending");
+  const [declining, setDeclining] = useState(null); // request id being declined
+  const [declineNote, setDeclineNote] = useState("");
 
 
   return (
@@ -2145,11 +2189,17 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, add
           One-off tasks that don't belong to a stage — like a request that came out of a meeting. Mark a task visible and the client sees it's in progress.
         </p>
         <div style={{ display: "inline-flex", border: `1px solid ${T.line}`, borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
-          {[["active", "Active"], ["all", "All"], ["completed", "Completed"]].map(([k, label]) => (
+          {[["active", "Active"], ["all", "All"], ["completed", "Completed"], ["requests", "Requests"]].map(([k, label]) => (
             <button key={k} onClick={() => setFilter(k)} style={{
               padding: "6px 12px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: filter === k ? 700 : 500,
               background: filter === k ? T.accent : "transparent", color: filter === k ? (dark ? "#0D0F13" : "#fff") : T.inkSoft,
-            }}>{label}</button>
+              display: "inline-flex", alignItems: "center", gap: 6,
+            }}>{label}{k === "requests" && pendingRequests.length > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 800, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 999,
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                background: filter === k ? (dark ? "#0D0F13" : "#fff") : T.accent, color: filter === k ? T.accent : (dark ? "#0D0F13" : "#fff") }}>
+                {pendingRequests.length}</span>
+            )}</button>
           ))}
         </div>
       </div>
@@ -2161,6 +2211,50 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, add
         </div>
       )}
 
+      {filter === "requests" ? (
+        <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
+          {taskRequests.length === 0 && (
+            <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>No client requests yet. When a client requests a task from their portal, it appears here for you to accept or decline.</div>
+          )}
+          {taskRequests.map(r => {
+            const st = r.status === "pending"
+              ? { label: "Pending", color: T.accent, bg: T.accentSoft }
+              : r.status === "accepted"
+              ? { label: "Accepted", color: dark ? "#9CC4A8" : "#3E7050", bg: dark ? "#1B2A20" : "#E6F0E9" }
+              : { label: "Declined", color: dangerColor, bg: "transparent" };
+            return (
+              <div key={r.id} style={{ padding: "14px 0", borderTop: `1px solid ${T.line}` }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>{r.title}</div>
+                    {r.description && <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 3 }}>{r.description}</div>}
+                    <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 4, opacity: 0.85 }}>Requested {fmtDate(r.at)}{r.decidedAt ? ` \u00b7 decided ${fmtDate(r.decidedAt)}` : ""}</div>
+                    {r.status === "declined" && r.adminNote && <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4, fontStyle: "italic" }}>Your note: {r.adminNote}</div>}
+                  </div>
+                  <span style={{ ...pillBase, cursor: "default", border: `1px solid ${st.color}`, color: st.color, background: st.bg }}>{st.label}</span>
+                </div>
+                {r.status === "pending" && (
+                  declining === r.id ? (
+                    <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <input autoFocus value={declineNote} onChange={e => setDeclineNote(e.target.value)}
+                        placeholder="Optional note to the client (why, or let's discuss)"
+                        style={{ ...inputStyle, flex: 1, minWidth: 200 }} />
+                      <button onClick={() => { declineRequest(r, declineNote); setDeclining(null); setDeclineNote(""); }}
+                        style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", padding: "7px 12px" }}>Confirm decline</button>
+                      <button onClick={() => { setDeclining(null); setDeclineNote(""); }} style={{ ...iconBtn, fontSize: 12 }}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <button onClick={() => acceptRequest(r)} style={{ ...primaryBtn, padding: "7px 14px", fontSize: 12 }}>Accept \u2192 create task</button>
+                      <button onClick={() => setDeclining(r.id)} style={{ ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", padding: "7px 12px" }}>Decline</button>
+                    </div>
+                  )
+                )}
+              </div>
+            );
+          })}
+        </section>
+      ) : (
       <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "6px 20px" }}>
         {visible.length === 0 && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "14px 0" }}>
           {tasks.length === 0 ? "No tasks yet." : filter === "completed" ? "No completed tasks." : "No active tasks — switch to All or Completed."}
@@ -2219,6 +2313,7 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, add
           </LooseTaskRow>
         )} />
       </section>
+      )}
     </div>
   );
 }
@@ -2557,13 +2652,17 @@ function ClientForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
 // ---------- Client portal (read-only, what the client sees) ----------
 // Convention here is the OPPOSITE of the admin: empty fields are hidden, not shown as placeholders.
 // Internal tasks never render; progress is computed from client-visible tasks only.
-function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onReportPayment, exitLabel = "Exit preview", projects, activeId, setActiveId }) {
+function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onReportPayment, onRequestTask, exitLabel = "Exit preview", projects, activeId, setActiveId }) {
   const isMobile = useIsMobile();
   const [tab, setTab] = useState("progress"); // progress | payments
   const [reportingId, setReportingId] = useState(null); // payment being reported (method picker open)
   const [reportMethod, setReportMethod] = useState(PAY_METHODS[0]);
   const [taskView, setTaskView] = useState("active"); // active | all | completed
   const [showSettings, setShowSettings] = useState(false); // account settings view (real login only)
+  const [showRequest, setShowRequest] = useState(false);
+  const [reqTitle, setReqTitle] = useState("");
+  const [reqDesc, setReqDesc] = useState("");
+  const myRequests = project.taskRequests || [];
   const isRealLogin = exitLabel === "Sign out";
 
   // Defensive guard: during state updates `project` can briefly be undefined.
@@ -2770,6 +2869,50 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
                 ))}
               </section>
             )}
+
+            {/* Client task requests */}
+            <section style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "16px 20px", marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: myRequests.length || showRequest ? 12 : 0 }}>
+                <div>
+                  <h2 style={{ fontSize: 15, margin: 0, fontWeight: 700 }}>Requests</h2>
+                  <p style={{ fontSize: 11.5, color: T.inkSoft, margin: "3px 0 0", maxWidth: 460 }}>Need something? Send a request and we'll review it — you'll see the status update here, and it becomes a task once accepted.</p>
+                </div>
+                <button onClick={() => setShowRequest(v => !v)} style={{ border: "none", background: T.accent, color: dark ? "#0D0F13" : "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0, minWidth: 130, textAlign: "center" }}>{showRequest ? "Close" : "Request a task"}</button>
+              </div>
+
+              {showRequest && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: myRequests.length ? 14 : 0 }}>
+                  <input autoFocus value={reqTitle} onChange={e => setReqTitle(e.target.value)} placeholder="What do you need? (short title)"
+                    style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} />
+                  <textarea value={reqDesc} onChange={e => setReqDesc(e.target.value)} placeholder="Any details (optional)" rows={3}
+                    style={{ ...inputStyle, width: "100%", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <button onClick={() => { setShowRequest(false); setReqTitle(""); setReqDesc(""); }} style={{ border: "none", background: "transparent", color: T.inkSoft, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>Cancel</button>
+                    <button disabled={!reqTitle.trim()} onClick={() => { onRequestTask(reqTitle.trim(), reqDesc.trim()); setShowRequest(false); setReqTitle(""); setReqDesc(""); }}
+                      style={{ border: "none", background: reqTitle.trim() ? T.accent : T.line, color: reqTitle.trim() ? (dark ? "#0D0F13" : "#fff") : T.inkSoft, borderRadius: 8, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, cursor: reqTitle.trim() ? "pointer" : "default", fontFamily: "inherit" }}>Send request</button>
+                  </div>
+                </div>
+              )}
+
+              {myRequests.map(r => {
+                const st = r.status === "pending"
+                  ? { label: "Pending review", color: T.accent, bg: T.accentSoft }
+                  : r.status === "accepted"
+                  ? { label: "Accepted", color: dark ? "#9CC4A8" : "#3E7050", bg: dark ? "#1B2A20" : "#E6F0E9" }
+                  : { label: "Declined", color: dangerColor, bg: "transparent" };
+                return (
+                  <div key={r.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderTop: `1px solid ${T.line}`, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 500, color: T.ink }}>{r.title}</div>
+                      {r.description && <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2 }}>{r.description}</div>}
+                      <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3 }}>Requested {fmtDate(r.at)}</div>
+                      {r.status === "declined" && r.adminNote && <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4, fontStyle: "italic" }}>Note: {r.adminNote}</div>}
+                    </div>
+                    <span style={{ ...pill, color: st.color, background: st.bg, border: r.status === "declined" ? `1px solid ${dangerColor}` : "none" }}>{st.label}</span>
+                  </div>
+                );
+              })}
+            </section>
 
             {/* Activity timeline */}
             {project.activity.length > 0 && (
