@@ -2549,6 +2549,8 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
     if ("name" in next) dbPatch.name = next.name;
     if ("company" in next) dbPatch.company = next.company;
     if ("email" in next) dbPatch.email = next.email;
+    if ("taxId" in next) dbPatch.tax_id = next.taxId;
+    if ("invoiceEmail" in next) dbPatch.invoice_email = next.invoiceEmail;
     if ("lastReset" in next) dbPatch.last_reset = next.lastReset;
     if (Object.keys(dbPatch).length) db.updateClient(id, dbPatch).catch(e => console.error(e));
   };
