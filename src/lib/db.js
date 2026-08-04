@@ -370,25 +370,30 @@ export const db = {
   // Clients
   async loadClients() {
     const { data, error } = await supabase.from("clients")
-      .select("id, name, company, email, status, last_reset, position, client_projects(project_id)")
+      .select("id, name, company, email, tax_id, invoice_email, status, last_reset, position, client_projects(project_id)")
       .order("position", { ascending: true })
       .order("created_at", { ascending: true });
     if (error) throw error;
     return (data || []).map((c) => ({
       id: c.id, name: c.name, company: c.company || "", email: c.email,
+      taxId: c.tax_id || "", invoiceEmail: c.invoice_email || "",
       status: c.status, lastReset: c.last_reset,
       projectIds: (c.client_projects || []).map((cp) => cp.project_id),
     }));
   },
   async createClient(c) {
     const { data, error } = await supabase.from("clients")
-      .insert({ name: c.name, company: c.company || "", email: c.email, status: "invited" })
+      .insert({ name: c.name, company: c.company || "", email: c.email, tax_id: c.taxId || "", invoice_email: c.invoiceEmail || "", status: "invited" })
       .select().single();
     if (error) throw error;
     return data.id;
   },
   async updateClient(id, patch) {
-    const { error } = await supabase.from("clients").update(patch).eq("id", id);
+    // Translate the camelCase UI fields to DB columns.
+    const row = { ...patch };
+    if ("taxId" in row) { row.tax_id = row.taxId; delete row.taxId; }
+    if ("invoiceEmail" in row) { row.invoice_email = row.invoiceEmail; delete row.invoiceEmail; }
+    const { error } = await supabase.from("clients").update(row).eq("id", id);
     if (error) throw error;
   },
   async deleteClient(id) {

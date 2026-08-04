@@ -291,6 +291,33 @@ const fmtDateTime = (iso) => {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ", " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 };
 const fmtBRL = (v) => Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+// Brazilian tax ID formatting. Auto-detects by digit count: <=11 -> CPF, else CNPJ.
+//   CPF:  XXX.XXX.XXX-XX      CNPJ: XX.XXX.XXX/XXXX-XX
+const formatTaxId = (v) => {
+  const d = String(v || "").replace(/\D/g, "").slice(0, 14);
+  let out = "";
+  if (d.length <= 11) {
+    for (let i = 0; i < d.length; i++) {
+      if (i === 3 || i === 6) out += ".";
+      if (i === 9) out += "-";
+      out += d[i];
+    }
+  } else {
+    for (let i = 0; i < d.length; i++) {
+      if (i === 2 || i === 5) out += ".";
+      if (i === 8) out += "/";
+      if (i === 12) out += "-";
+      out += d[i];
+    }
+  }
+  return out;
+};
+// Valid = 11 digits (CPF) or 14 digits (CNPJ). Light check, no checksum.
+const isValidTaxId = (v) => {
+  const n = String(v || "").replace(/\D/g, "").length;
+  return n === 11 || n === 14;
+};
 // After paying a recurring obligation, roll its due date to the next cycle
 function rollForward(dateStr, recurrence) {
   const d = new Date(dateStr + "T00:00:00");
@@ -506,6 +533,8 @@ export default function App({ mode = "admin" }) {
   const [npName, setNpName] = useState("");
   const [npClientId, setNpClientId] = useState(""); // "" = no client, "__new__" = create one inline
   const [npNewName, setNpNewName] = useState(""); const [npNewCompany, setNpNewCompany] = useState(""); const [npNewEmail, setNpNewEmail] = useState("");
+  const [npNewTaxId, setNpNewTaxId] = useState(""); const [npNewInvoiceEmail, setNpNewInvoiceEmail] = useState("");
+  const [npError, setNpError] = useState("");
   const [editingProject, setEditingProject] = useState(false);
   const [editingStage, setEditingStage] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
@@ -799,7 +828,7 @@ export default function App({ mode = "admin" }) {
     p.accesses = orderedIds.map(id => byId[id]).filter(Boolean);
     return p; // persistProject writes new positions by array index
   });
-  const resetNewProject = () => { setShowNewProject(false); setNpName(""); setNpClientId(""); setNpNewName(""); setNpNewCompany(""); setNpNewEmail(""); };
+  const resetNewProject = () => { setShowNewProject(false); setNpName(""); setNpClientId(""); setNpNewName(""); setNpNewCompany(""); setNpNewEmail(""); setNpNewTaxId(""); setNpNewInvoiceEmail(""); setNpError(""); };
   const addProject = async () => {
     if (!npName.trim()) return;
     const name = npName.trim();
@@ -807,9 +836,11 @@ export default function App({ mode = "admin" }) {
       // Resolve the client: an existing record, a brand-new one, or none.
       let clientRec = null; // { id, company }
       if (npClientId === "__new__") {
-        if (!npNewName.trim() || !npNewEmail.trim()) return; // new client needs at least name + email
+        if (!npNewName.trim() || !npNewEmail.trim()) { setNpError("New client needs a name and email."); return; }
+        if (!isValidTaxId(npNewTaxId)) { setNpError("Enter a valid CPF (11 digits) or CNPJ (14 digits) for the client."); return; }
         const company = npNewCompany.trim() || npNewName.trim();
-        const cid = await db.createClient({ name: npNewName.trim(), company, email: npNewEmail.trim() });
+        const cid = await db.createClient({ name: npNewName.trim(), company, email: npNewEmail.trim(),
+          taxId: formatTaxId(npNewTaxId), invoiceEmail: (npNewInvoiceEmail.trim() || npNewEmail.trim()) });
         clientRec = { id: cid, company };
       } else if (npClientId) {
         const c = clients.find(c => c.id === npClientId);
@@ -1113,9 +1144,14 @@ export default function App({ mode = "admin" }) {
                       <input value={npNewCompany} onChange={e => setNpNewCompany(e.target.value)} placeholder="Company (defaults to name)"
                         style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
                       <input value={npNewEmail} onChange={e => setNpNewEmail(e.target.value)} placeholder="Email for notifications *"
+                        style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
+                      <input value={npNewTaxId} onChange={e => setNpNewTaxId(formatTaxId(e.target.value))} placeholder="CPF or CNPJ *"
+                        style={{ width: "100%", boxSizing: "border-box", padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
+                      <input value={npNewInvoiceEmail} onChange={e => setNpNewInvoiceEmail(e.target.value)} placeholder="Invoice email (blank = notification email)"
                         style={{ width: "100%", boxSizing: "border-box", marginBottom: 4, padding: "7px 9px", borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 12.5, fontFamily: "inherit", background: T.inputBg, color: T.ink }} />
                     </div>
                   )}
+                  {npError && <div style={{ color: "#E2918B", fontSize: 11.5, marginBottom: 6 }}>{npError}</div>}
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={addProject} style={{ flex: 1, padding: "7px 0", borderRadius: 6, border: "none", background: PALETTE.copper, color: PALETTE.graphite, fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Create</button>
                     <button onClick={resetNewProject} style={{ flex: 1, padding: "7px 0", borderRadius: 6, border: "1px solid rgba(255,255,255,.25)", background: "transparent", color: "inherit", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
@@ -2568,6 +2604,9 @@ function ClientsPage({ T, dark, dangerColor, clients, setClients, reloadClients,
                     <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 3, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                       {c.company} · <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="mail" size={11} style={{ verticalAlign: 0 }} />{c.email}</span><CopyButton value={c.email} T={T} />
                       {c.lastReset && <> · password reset sent {fmtDate(c.lastReset)}</>}
+                      {c.taxId
+                        ? <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>· {c.taxId}{c.invoiceEmail && c.invoiceEmail !== c.email ? ` · invoices → ${c.invoiceEmail}` : ""}</span>
+                        : <span style={{ fontSize: 10, fontWeight: 700, color: dangerColor, border: `1px solid ${dangerColor}`, borderRadius: 999, padding: "2px 8px" }}>Missing tax ID — add before invoicing</span>}
                       {c.email && portalUsers[c.email] === true && <span style={{ fontSize: 10, fontWeight: 700, color: dark ? "#9CC4A8" : "#3E7050", background: dark ? "#1B2A20" : "#E6F0E9", borderRadius: 999, padding: "2px 8px" }}>Portal login active</span>}
                       {c.email && portalUsers[c.email] === false && (
                         <button onClick={() => invite(c)} disabled={inviting === c.id}
@@ -2636,15 +2675,24 @@ function ClientForm({ initial, onSubmit, onCancel, T, inputStyle, primaryBtn }) 
   const [name, setName] = useState(initial?.name || "");
   const [company, setCompany] = useState(initial?.company || "");
   const [email, setEmail] = useState(initial?.email || "");
+  const [taxId, setTaxId] = useState(formatTaxId(initial?.taxId || ""));
+  const [invoiceEmail, setInvoiceEmail] = useState(initial?.invoiceEmail || "");
+  const [err, setErr] = useState("");
   const submit = () => {
-    if (!name.trim() || !email.trim()) return;
-    onSubmit({ name: name.trim(), company: company.trim(), email: email.trim() });
+    if (!name.trim() || !email.trim()) { setErr("Name and email are required."); return; }
+    if (!isValidTaxId(taxId)) { setErr("Enter a valid CPF (11 digits) or CNPJ (14 digits)."); return; }
+    // Invoice email defaults to the main email when left blank.
+    onSubmit({ name: name.trim(), company: company.trim(), email: email.trim(),
+      taxId: formatTaxId(taxId), invoiceEmail: (invoiceEmail.trim() || email.trim()) });
   };
   return (
     <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 14, marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
       <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Client name *" style={{ ...inputStyle, flex: "1 1 160px" }} />
       <input value={company} onChange={e => setCompany(e.target.value)} placeholder="Company (matches project client)" style={{ ...inputStyle, flex: "1 1 180px" }} />
-      <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Email *" style={{ ...inputStyle, flex: "1 1 180px" }} />
+      <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Main email *" style={{ ...inputStyle, flex: "1 1 180px" }} />
+      <input value={taxId} onChange={e => setTaxId(formatTaxId(e.target.value))} placeholder="CPF or CNPJ *" style={{ ...inputStyle, flex: "1 1 180px" }} />
+      <input value={invoiceEmail} onChange={e => setInvoiceEmail(e.target.value)} placeholder="Invoice email (blank = main email)" style={{ ...inputStyle, flex: "1 1 200px" }} />
+      {err && <div style={{ width: "100%", color: "#E2918B", fontSize: 12 }}>{err}</div>}
       <button onClick={submit} style={primaryBtn}>{initial ? "Save" : "Add Client"}</button>
       {onCancel && <button onClick={onCancel} style={{ border: "none", background: "transparent", color: T.inkSoft, cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>Cancel</button>}
     </div>
