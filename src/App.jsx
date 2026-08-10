@@ -702,37 +702,50 @@ export default function App({ mode = "admin" }) {
     const a = mkAccess(item);
     const pw = a.password; a.password = ""; // plaintext never lives in state
     if (pw) a.hasPassword = true;
-    // Persist the row FIRST (so it exists), THEN store the credential in Vault.
-    // Firing both in parallel raced: the Vault RPC could run before the row
-    // existed, silently attaching nothing.
-    setProjects(ps => {
-      const next = ps.map(p => p.id === activeId ? (() => { const c = structuredClone(p); (c.accesses = c.accesses || []).push(a); return c; })() : p);
-      const changed = next.find(p => p.id === activeId);
-      if (changed) {
-        persistProject(changed)
-          .then(() => { if (pw) return db.setAccessPassword(a.id, pw); })
-          .catch(e => console.error("store credential failed", e));
+    const proj = projects.find(p => p.id === activeId);
+    if (!proj) return;
+    const changed = { ...proj, accesses: [...(proj.accesses || []), a] };
+    setProjects(ps => ps.map(p => p.id === activeId ? changed : p));
+    // Side-effects run OUTSIDE the state updater. Persist the row first (so it
+    // exists), then store the credential in Vault. Errors surface to the user.
+    (async () => {
+      try {
+        await persistProject(changed);
+        if (pw) {
+          await db.setAccessPassword(a.id, pw);
+          const check = await db.revealAccessPassword(a.id);
+          if (!check) throw new Error("Password did not save. Please try again.");
+        }
+      } catch (e) {
+        console.error("store credential failed", e);
+        alert("Could not save the access password: " + (e.message || e));
+        setProjects(ps => ps.map(p => p.id === activeId
+          ? { ...p, accesses: (p.accesses || []).map(x => x.id === a.id ? { ...x, hasPassword: false } : x) } : p));
       }
-      return next;
-    });
+    })();
   };
   const saveAccess = (aid, patch) => {
     const pw = patch.password; const rest = { ...patch }; delete rest.password;
-    setProjects(ps => {
-      const next = ps.map(p => p.id === activeId ? (() => {
-        const c = structuredClone(p);
-        const a = (c.accesses || []).find(a => a.id === aid);
-        if (a) { Object.assign(a, rest); if (pw) a.hasPassword = true; }
-        return c;
-      })() : p);
-      const changed = next.find(p => p.id === activeId);
-      if (changed) {
-        persistProject(changed)
-          .then(() => { if (pw) return db.setAccessPassword(aid, pw); })
-          .catch(e => console.error("store credential failed", e));
+    const proj = projects.find(p => p.id === activeId);
+    if (!proj) return;
+    const changed = { ...proj, accesses: (proj.accesses || []).map(a =>
+      a.id === aid ? { ...a, ...rest, ...(pw ? { hasPassword: true } : {}) } : a) };
+    setProjects(ps => ps.map(p => p.id === activeId ? changed : p));
+    (async () => {
+      try {
+        await persistProject(changed);
+        if (pw) {
+          await db.setAccessPassword(aid, pw);
+          const check = await db.revealAccessPassword(aid);
+          if (!check) throw new Error("Password did not save. Please try again.");
+        }
+      } catch (e) {
+        console.error("store credential failed", e);
+        alert("Could not save the access password: " + (e.message || e));
+        setProjects(ps => ps.map(p => p.id === activeId
+          ? { ...p, accesses: (p.accesses || []).map(x => x.id === aid ? { ...x, hasPassword: false } : x) } : p));
       }
-      return next;
-    });
+    })();
   };
   const deleteAccess = (aid) => { update(p => { p.accesses = (p.accesses || []).filter(a => a.id !== aid); return p; }); db.deleteAccess(aid).catch(e => console.error(e)); };
 
