@@ -701,13 +701,38 @@ export default function App({ mode = "admin" }) {
   const addAccess = (item) => {
     const a = mkAccess(item);
     const pw = a.password; a.password = ""; // plaintext never lives in state
-    update(p => { (p.accesses = p.accesses || []).push(a); return p; });
-    if (pw) db.setAccessPassword(a.id, pw).catch(e => console.error("store credential failed", e));
+    if (pw) a.hasPassword = true;
+    // Persist the row FIRST (so it exists), THEN store the credential in Vault.
+    // Firing both in parallel raced: the Vault RPC could run before the row
+    // existed, silently attaching nothing.
+    setProjects(ps => {
+      const next = ps.map(p => p.id === activeId ? (() => { const c = structuredClone(p); (c.accesses = c.accesses || []).push(a); return c; })() : p);
+      const changed = next.find(p => p.id === activeId);
+      if (changed) {
+        persistProject(changed)
+          .then(() => { if (pw) return db.setAccessPassword(a.id, pw); })
+          .catch(e => console.error("store credential failed", e));
+      }
+      return next;
+    });
   };
   const saveAccess = (aid, patch) => {
     const pw = patch.password; const rest = { ...patch }; delete rest.password;
-    update(p => { const a = (p.accesses || []).find(a => a.id === aid); if (a) { Object.assign(a, rest); if (pw) a.hasPassword = true; } return p; });
-    if (pw) db.setAccessPassword(aid, pw).catch(e => console.error("store credential failed", e));
+    setProjects(ps => {
+      const next = ps.map(p => p.id === activeId ? (() => {
+        const c = structuredClone(p);
+        const a = (c.accesses || []).find(a => a.id === aid);
+        if (a) { Object.assign(a, rest); if (pw) a.hasPassword = true; }
+        return c;
+      })() : p);
+      const changed = next.find(p => p.id === activeId);
+      if (changed) {
+        persistProject(changed)
+          .then(() => { if (pw) return db.setAccessPassword(aid, pw); })
+          .catch(e => console.error("store credential failed", e));
+      }
+      return next;
+    });
   };
   const deleteAccess = (aid) => { update(p => { p.accesses = (p.accesses || []).filter(a => a.id !== aid); return p; }); db.deleteAccess(aid).catch(e => console.error(e)); };
 
