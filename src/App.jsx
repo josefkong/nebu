@@ -1379,6 +1379,7 @@ export default function App({ mode = "admin" }) {
                     padding: "5px 12px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600,
                     background: taskView === k ? T.accent : "transparent",
                     color: taskView === k ? (dark ? "#0D0F13" : "#fff") : T.inkSoft,
+                    minWidth: 92, boxSizing: "border-box", textAlign: "center",
                   }}>{label}</button>
                 ))}
               </div>
@@ -2269,7 +2270,8 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, tas
             <button key={k} onClick={() => setFilter(k)} style={{
               padding: "6px 12px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: filter === k ? 700 : 500,
               background: filter === k ? T.accent : "transparent", color: filter === k ? (dark ? "#0D0F13" : "#fff") : T.inkSoft,
-              display: "inline-flex", alignItems: "center", gap: 6,
+              display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+              minWidth: 96, boxSizing: "border-box",
             }}>{label}{k === "requests" && pendingRequests.length > 0 && (
               <span style={{ fontSize: 10, fontWeight: 800, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 999,
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -2896,6 +2898,7 @@ function ClientPortal({ project, T, dark, dangerColor, todayStr, onExit, onRepor
                     padding: "5px 14px", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600,
                     background: taskView === k ? T.accent : "transparent",
                     color: taskView === k ? (dark ? "#0D0F13" : "#fff") : T.inkSoft,
+                    minWidth: 92, boxSizing: "border-box", textAlign: "center",
                   }}>{label}</button>
                 ))}
               </div>
