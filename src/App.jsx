@@ -1505,23 +1505,23 @@ export default function App({ mode = "admin" }) {
                         </span>
                       )}
                       <button onClick={() => cycleRecurrence(s.id, t.id)} title={t.recurrence !== "none" ? `Repeats ${RECURRENCE[t.recurrence || "none"].toLowerCase()} — click to change` : "One-time task — click to make it recurring"}
-                        style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "6px 11px" }}>
+                        style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "6px 11px", width: 104, minWidth: 104, boxSizing: "border-box" }}>
                         <Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence || "none"]}
                       </button>
                       <button onClick={() => cycleUrgency(s.id, t.id)} title="Click to cycle urgency"
-                        style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: "6px 11px" }}>
+                        style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: "6px 11px", width: 104, minWidth: 104, boxSizing: "border-box" }}>
                         {URGENCY[t.urgency].label}
                       </button>
                       <button onClick={() => cycleStatus(s.id, t.id)} title="Click to cycle status"
-                        style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: "6px 11px" }}>
+                        style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: "6px 11px", width: 104, minWidth: 104, boxSizing: "border-box" }}>
                         {STATUS[t.status].label}
                       </button>
                       <button onClick={() => toggleVis(s.id, t.id)} title={t.clientVisible ? "Visible to client" : "Internal only"}
-                        style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: "6px 11px" }}>
+                        style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: "6px 11px", width: 132, minWidth: 132, boxSizing: "border-box" }}>
                         {t.clientVisible ? "Client sees this" : "Internal"}
                       </button>
-                      <button onClick={() => setEditingTask(t.id)} style={{ ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px" }} title="Edit task"><Icon name="edit" size={12} />Edit</button>
-                      <button onClick={() => deleteTask(s.id, t.id)} style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px" }} title="Delete task"><Icon name="x" size={13} />Delete</button>
+                      <button onClick={() => setEditingTask(t.id)} style={{ ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "6px 11px", width: 88, minWidth: 88, boxSizing: "border-box" }} title="Edit task"><Icon name="edit" size={12} />Edit</button>
+                      <button onClick={() => deleteTask(s.id, t.id)} style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "6px 11px", width: 88, minWidth: 88, boxSizing: "border-box" }} title="Delete task"><Icon name="x" size={13} />Delete</button>
                       </div>
                       {t.guide && expandedGuide === t.id && (
                         <div style={{
@@ -2368,23 +2368,23 @@ function LooseTasksSection({ T, dark, dangerColor, todayStr, tasks, focusId, tas
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, width: "100%", paddingLeft: 24 }}>
                   <button onClick={() => cycleLooseRecurrence(t.id)} title="Click to cycle recurrence"
-                    style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "6px 11px" }}>
+                    style={{ ...pillBase, border: `1px solid ${t.recurrence && t.recurrence !== "none" ? T.accent : T.line}`, color: t.recurrence && t.recurrence !== "none" ? T.accent : T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "6px 11px", width: 104, minWidth: 104, boxSizing: "border-box" }}>
                     <Icon name="repeat" size={10} style={{ verticalAlign: 0 }} />{RECURRENCE[t.recurrence || "none"]}
                   </button>
                   <button onClick={() => cycleLooseUrgency(t.id)} title="Click to cycle urgency"
-                    style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: "6px 11px" }}>
+                    style={{ ...pillBase, border: `1px solid ${URGENCY[t.urgency].border}`, color: URGENCY[t.urgency].color, background: URGENCY[t.urgency].bg, padding: "6px 11px", width: 104, minWidth: 104, boxSizing: "border-box" }}>
                     {URGENCY[t.urgency].label}
                   </button>
                   <button onClick={() => cycleLooseStatus(t.id)} title="Click to cycle status"
-                    style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: "6px 11px" }}>
+                    style={{ ...pillBase, border: "none", color: STATUS[t.status].color, background: STATUS[t.status].bg, padding: "6px 11px", width: 104, minWidth: 104, boxSizing: "border-box" }}>
                     {STATUS[t.status].label}
                   </button>
                   <button onClick={() => toggleLooseVis(t.id)} title={t.clientVisible ? "Visible to client" : "Internal only"}
-                    style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: "6px 11px" }}>
+                    style={{ ...pillBase, border: `1px solid ${t.clientVisible ? T.accent : T.line}`, color: t.clientVisible ? T.accent : T.inkSoft, background: t.clientVisible ? T.accentSoft : "transparent", padding: "6px 11px", width: 132, minWidth: 132, boxSizing: "border-box" }}>
                     {t.clientVisible ? "Client sees this" : "Internal"}
                   </button>
-                  <button onClick={() => setEditId(t.id)} style={{ ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px" }} title="Edit task"><Icon name="edit" size={12} />Edit</button>
-                  <button onClick={() => deleteLooseTask(t.id)} style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 11px" }} title="Delete task"><Icon name="x" size={13} />Delete</button>
+                  <button onClick={() => setEditId(t.id)} style={{ ...pillBase, border: `1px solid ${T.line}`, color: T.inkSoft, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "6px 11px", width: 88, minWidth: 88, boxSizing: "border-box" }} title="Edit task"><Icon name="edit" size={12} />Edit</button>
+                  <button onClick={() => deleteLooseTask(t.id)} style={{ ...pillBase, border: `1px solid ${dangerColor}`, color: dangerColor, background: "transparent", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "6px 11px", width: 88, minWidth: 88, boxSizing: "border-box" }} title="Delete task"><Icon name="x" size={13} />Delete</button>
                 </div>
               </>
             )}
